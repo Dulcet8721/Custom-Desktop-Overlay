@@ -15,12 +15,14 @@
 #include <mutex>
 #include <atomic>
 #include <map>
+
 #ifndef GET_X_LPARAM
 #define GET_X_LPARAM(lParam) ((int)(short)LOWORD(lParam))
 #endif
 #ifndef GET_Y_LPARAM
 #define GET_Y_LPARAM(lParam) ((int)(short)HIWORD(lParam))
 #endif
+
 #define IDI_MYICON 101
 #define ID_TRAY_APP_ICON 1001
 #define ID_TRAY_EXIT 1002
@@ -51,11 +53,14 @@
 #define ID_SCALE_DELAY_TIMER 2030
 #define WM_UPDATE_MONITOR_NAMES (WM_APP + 1)
 #define WM_SHOW_AND_MESSAGE (WM_APP + 2)
+
 using namespace Gdiplus;
+
 struct ImageFile {
     std::wstring path;
     std::wstring filename;
 };
+
 struct MonitorInfo {
     int index;
     std::wstring name;
@@ -64,6 +69,7 @@ struct MonitorInfo {
     HMONITOR handle;
     RECT rect;
 };
+
 struct EditField {
     std::wstring text;
     bool hasFocus;
@@ -71,15 +77,19 @@ struct EditField {
     UINT id;
     HWND hwnd;
 };
+
 struct GdiObjectDeleter {
     void operator()(HGDIOBJ obj) { if (obj) DeleteObject(obj); }
 };
+
 struct IconDeleter {
     void operator()(HICON icon) { if (icon) DestroyIcon(icon); }
 };
+
 using UniqueHBrush = std::unique_ptr<std::remove_pointer<HBRUSH>::type, GdiObjectDeleter>;
 using UniqueHIcon = std::unique_ptr<std::remove_pointer<HICON>::type, IconDeleter>;
 using UniqueBitmap = std::unique_ptr<Bitmap>;
+
 class AnimatedGIF {
 private:
     IWICImagingFactory* m_pFactory;
@@ -94,6 +104,7 @@ private:
     HWND m_hwndOverlay;
     bool m_isInitialized;
     std::mutex m_cacheMutex;
+
     void Cleanup() {
         m_frames.clear();
         if (m_pDecoder) { m_pDecoder->Release(); m_pDecoder = NULL; }
@@ -101,6 +112,7 @@ private:
         std::lock_guard<std::mutex> lock(m_cacheMutex);
         m_scaledFrames.clear(); m_scaledCacheScale = 0;
     }
+
     std::unique_ptr<Gdiplus::Bitmap> CreateBitmapFromConverter(IWICFormatConverter* pConverter, UINT width, UINT height) {
         auto bitmap = std::make_unique<Gdiplus::Bitmap>(width, height, PixelFormat32bppPARGB);
         Gdiplus::BitmapData bmpData;
@@ -113,14 +125,17 @@ private:
         }
         return nullptr;
     }
+
 public:
     AnimatedGIF() : m_pFactory(NULL), m_pDecoder(NULL), m_currentFrame(0), m_width(0), m_height(0), m_timerId(0), m_hwndOverlay(NULL), m_isInitialized(false), m_scaledCacheScale(0) {
         CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&m_pFactory));
     }
+
     ~AnimatedGIF() {
         StopAnimation(); Cleanup();
         if (m_pFactory) m_pFactory->Release();
     }
+
     bool Load(const std::wstring& filename) {
         Cleanup();
         HRESULT hr = m_pFactory->CreateDecoderFromFilename(filename.c_str(), NULL, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &m_pDecoder);
@@ -187,6 +202,7 @@ public:
         m_currentFrame = 0; m_isInitialized = true;
         return true;
     }
+
     void StartAnimation(HWND hwndOverlay) {
         if (!m_isInitialized || m_frames.empty()) return;
         m_hwndOverlay = hwndOverlay;
@@ -195,7 +211,9 @@ public:
             m_timerId = SetTimer(m_hwndOverlay, ID_ANIMATION_TIMER, m_frames[m_currentFrame.load()].delay, NULL);
         }
     }
+
     void StopAnimation() { if (m_timerId && m_hwndOverlay && IsWindow(m_hwndOverlay)) { KillTimer(m_hwndOverlay, m_timerId); m_timerId = 0; } }
+
     void NextFrame() {
         if (!m_isInitialized || m_frames.empty()) return;
         m_currentFrame = (m_currentFrame + 1) % m_frames.size();
@@ -204,6 +222,7 @@ public:
             m_timerId = SetTimer(m_hwndOverlay, ID_ANIMATION_TIMER, m_frames[m_currentFrame.load()].delay, NULL);
         }
     }
+
     std::shared_ptr<Gdiplus::Bitmap> GetScaledFrame(int index, float scale, int targetWidth, int targetHeight) {
         if (index < 0 || index >= (int)m_frames.size()) return nullptr;
         std::lock_guard<std::mutex> lock(m_cacheMutex);
@@ -223,6 +242,7 @@ public:
         }
         return m_scaledFrames[index];
     }
+
     bool IsInitialized() const { return m_isInitialized; }
     bool IsAnimated() const { return m_frames.size() > 1; }
     int GetWidth() const { return (int)m_width; }
@@ -230,6 +250,7 @@ public:
     UINT GetCurrentFrameIndex() const { return m_currentFrame.load(); }
     void ClearCache() { std::lock_guard<std::mutex> lock(m_cacheMutex); m_scaledFrames.clear(); m_scaledCacheScale = 0; }
 };
+
 void DrawOwnerDrawButton(HDC hdc, HWND hwnd, bool isPressed, const std::wstring& text, bool isActiveTab = false);
 void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstring& text);
 void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type);
@@ -242,7 +263,7 @@ void UpdateAllButtons();
 void AddImageToList(const std::wstring& filePath, bool saveToIni);
 void SaveAllSettingsToIni();
 void LoadAllSettingsFromIni();
-void CreateOverlayWindow(const std::wstring& imagePath);
+void CreateOverlayWindow(const std::wstring& imagePath, bool saveToIni = true);
 void UpdateScaleControls();
 void UpdateOffsetEditControls();
 void UpdateImageSelection();
@@ -271,13 +292,14 @@ void UpdateEditFieldText(EditField* field, const std::wstring& newText);
 void ShowOwnerDrawMessageBox(HWND hwndParent, const std::wstring& message);
 LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 void DrawMessageBoxButton(HDC hdc, HWND hwnd, bool isPressed, bool isFocused);
-void ResetHotkeyField(int fieldId, wchar_t defaultKey, wchar_t& currentKey, wchar_t& lastValidKey, EditField& field, bool showConflictMessage = true);
+bool ResetHotkeyField(int fieldId, wchar_t defaultKey, wchar_t& currentKey, wchar_t& lastValidKey, EditField& field, bool showConflictMessage = true);
 void UpdateOffsetBoundsDisplay();
 void CheckMonitorConfiguration();
 void UpdateOverlayPosition();
 void RenderOverlay();
 void RenderOverlayInThread();
 void OnScaleChangedDelayed();
+
 NOTIFYICONDATA nid = {};
 HWND g_hwnd = NULL;
 HWND g_hImageList = NULL, g_hBrowseButton = NULL, g_hHideOverlayCheckbox = NULL, g_hMonitorList = NULL;
@@ -324,12 +346,18 @@ std::mutex g_monitorMutex;
 std::thread g_monitorNamesThread;
 bool g_scaleTimerActive = false;
 float g_pendingScale = 1.0f;
+bool g_settingsChanged = false;
+
+std::atomic<int> g_overlayX = 0, g_overlayY = 0;
+
 LRESULT CALLBACK OverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+
 std::wstring GetIniFilePath() {
     wchar_t exePath[MAX_PATH] = {0}; GetModuleFileNameW(NULL, exePath, MAX_PATH);
     std::wstring exeDir = exePath; size_t lastSlash = exeDir.find_last_of(L"\\/"); if (lastSlash != std::wstring::npos) exeDir = exeDir.substr(0, lastSlash + 1);
     return exeDir + L"settings.ini";
 }
+
 std::map<std::wstring, std::wstring> GetDeviceIdMap() {
     std::map<std::wstring, std::wstring> deviceMap; DISPLAY_DEVICE ddAdapter, ddMonitor;
     ddAdapter.cb = sizeof(DISPLAY_DEVICE); ddMonitor.cb = sizeof(DISPLAY_DEVICE);
@@ -338,6 +366,7 @@ std::map<std::wstring, std::wstring> GetDeviceIdMap() {
             if (ddMonitor.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) deviceMap[ddMonitor.DeviceName] = ddMonitor.DeviceID;
     return deviceMap;
 }
+
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
     static std::map<std::wstring, std::wstring> deviceMap = GetDeviceIdMap();
     MONITORINFOEX monitorInfo = {0}; monitorInfo.cbSize = sizeof(monitorInfo);
@@ -352,6 +381,7 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
     g_monitors.push_back(info);
     return TRUE;
 }
+
 std::vector<std::pair<std::wstring, std::wstring>> GetMonitorFriendlyNamesPowerShellWithInstance() {
     std::vector<std::pair<std::wstring, std::wstring>> result; HANDLE hReadPipe, hWritePipe;
     SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
@@ -384,16 +414,19 @@ std::vector<std::pair<std::wstring, std::wstring>> GetMonitorFriendlyNamesPowerS
     CloseHandle(hReadPipe);
     return result;
 }
+
 std::wstring ExtractModelFromInstanceName(const std::wstring& instanceName) {
     size_t start = instanceName.find(L'\\'); if (start == std::wstring::npos) return L""; start++;
     size_t end = instanceName.find(L'\\', start); if (end == std::wstring::npos) return L"";
     return instanceName.substr(start, end - start);
 }
+
 std::wstring ExtractModelFromDeviceID(const std::wstring& deviceID) {
     size_t start = deviceID.find(L'#'); if (start == std::wstring::npos) return L""; start++;
     size_t end = deviceID.find(L'#', start); if (end == std::wstring::npos) return L"";
     return deviceID.substr(start, end - start);
 }
+
 void LoadMonitorNamesThread() {
     auto psPairs = GetMonitorFriendlyNamesPowerShellWithInstance();
     std::map<std::wstring, std::wstring> modelToName;
@@ -403,25 +436,32 @@ void LoadMonitorNamesThread() {
         g_monitorNamesLoaded = true; }
     if (g_programExiting) return; PostMessage(g_hwnd, WM_UPDATE_MONITOR_NAMES, 0, 0);
 }
+
 void ForceForegroundWindow(HWND hwnd) {
     DWORD foreThread = GetWindowThreadProcessId(GetForegroundWindow(), NULL), appThread = GetCurrentThreadId();
     if (foreThread != appThread) { AttachThreadInput(foreThread, appThread, TRUE); SetForegroundWindow(hwnd); AttachThreadInput(foreThread, appThread, FALSE); }
     else SetForegroundWindow(hwnd);
     BringWindowToTop(hwnd); SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
 }
+
 void UpdateMonitorList() {
-    { std::lock_guard<std::mutex> lock(g_monitorMutex); g_monitors.clear(); EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, 0); }
+    { std::lock_guard<std::mutex> lock(g_monitorMutex); g_monitors.clear(); g_monitorNamesLoaded = false; EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, 0); }
     if (g_monitorNamesThread.joinable()) g_monitorNamesThread.join();
     if (!g_monitorNamesLoaded) g_monitorNamesThread = std::thread(LoadMonitorNamesThread);
     if (g_selectedMonitor >= (int)g_monitors.size()) { g_selectedMonitor = 0; g_monitorListSelected = 0; } else g_monitorListSelected = g_selectedMonitor;
     if (g_hMonitorList) InvalidateRect(g_hMonitorList, NULL, TRUE); UpdateOffsetBoundsDisplay();
 }
+
 bool IsMessageBoxWithTextOpen(const std::wstring& text) {
     HWND hWnd = NULL; while (true) { hWnd = FindWindowEx(NULL, hWnd, L"OwnerDrawMessageBox", NULL); if (!hWnd) break; HANDLE hProp = GetProp(hWnd, L"MessageText"); if (hProp && *(std::wstring*)hProp == text) return true; } return false;
 }
+
 int GetOpenMessageBoxCount() { int count = 0; HWND hWnd = NULL; while (true) { hWnd = FindWindowEx(NULL, hWnd, L"OwnerDrawMessageBox", NULL); if (!hWnd) break; count++; } return count; }
+
 void ActivateNextMessageBox(HWND hCurrent) { HWND hWnd = NULL; while (true) { hWnd = FindWindowEx(NULL, hWnd, L"OwnerDrawMessageBox", NULL); if (!hWnd) break; if (hWnd != hCurrent) { ForceForegroundWindow(hWnd); return; } } }
+
 void UpdateOffsetBoundsDisplay() { if (g_hwnd && IsWindowVisible(g_hMonitorList)) { RECT boundsRect = {8,118,280,180}; InvalidateRect(g_hwnd, &boundsRect, TRUE); UpdateWindow(g_hwnd); } }
+
 void CheckMonitorConfiguration() {
     std::vector<MonitorInfo> currentMonitors = g_monitors; g_monitors.clear(); EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, 0);
     bool configChanged = false; if (g_monitors.size() != g_prevMonitorCount) configChanged = true; else for (size_t i=0; i<g_monitors.size(); ++i) if (memcmp(&g_monitors[i].rect, &g_prevMonitorRects[i], sizeof(RECT)) != 0) { configChanged = true; break; }
@@ -433,11 +473,13 @@ void CheckMonitorConfiguration() {
         g_prevMonitorCount = (int)g_monitors.size(); g_prevMonitorRects.clear(); for (const auto& m : g_monitors) g_prevMonitorRects.push_back(m.rect);
     }
 }
+
 bool IsSupportedImageFormat(const std::wstring& filePath) {
     size_t dotPos = filePath.find_last_of(L"."); if (dotPos == std::wstring::npos) return false;
     std::wstring ext = filePath.substr(dotPos + 1); for (wchar_t& c : ext) c = towlower(c);
     return ext == L"png" || ext == L"jpg" || ext == L"jpeg" || ext == L"gif";
 }
+
 void DrawOwnerDrawButton(HDC hdc, HWND hwnd, bool isPressed, const std::wstring& text, bool isActiveTab) {
     RECT rc; GetClientRect(hwnd, &rc);
     FillRect(hdc, &rc, isActiveTab ? g_hActiveTabBrush.get() : (isPressed ? g_hButtonPressedBrush.get() : g_hButtonBrush.get()));
@@ -449,6 +491,7 @@ void DrawOwnerDrawButton(HDC hdc, HWND hwnd, bool isPressed, const std::wstring&
     DrawText(hdc, text.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hOldFont);
 }
+
 void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstring& text) {
     RECT rc; GetClientRect(hwnd, &rc); FillRect(hdc, &rc, g_hBackgroundBrush.get());
     int checkboxSize = 13, textMargin = 5, checkboxX = rc.left + 2, checkboxY = rc.top + (rc.bottom-rc.top-checkboxSize)/2;
@@ -466,6 +509,7 @@ void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstrin
     DrawText(hdc, text.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hOldFont);
 }
+
 void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type) {
     RECT rc; GetClientRect(hwnd, &rc); FillRect(hdc, &rc, g_hListBoxBackgroundBrush.get());
     HPEN hBorderPen = CreatePen(PS_SOLID, 1, g_darkTheme ? RGB(80,80,80) : RGB(150,150,150)); HPEN hOldPen = (HPEN)SelectObject(hdc, hBorderPen); HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
@@ -493,6 +537,7 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type) {
     }
     SelectObject(hdc, hOldFont);
 }
+
 void DrawOwnerDrawEdit(HDC hdc, HWND hwnd, EditField* field, bool darkTheme) {
     RECT rc; GetClientRect(hwnd, &rc); FillRect(hdc, &rc, g_hListBoxBackgroundBrush.get());
     COLORREF borderColor = darkTheme ? RGB(80,80,80) : RGB(150,150,150); if (field->hasFocus) borderColor = darkTheme ? RGB(255,255,255) : RGB(0,0,0);
@@ -509,6 +554,7 @@ void DrawOwnerDrawEdit(HDC hdc, HWND hwnd, EditField* field, bool darkTheme) {
     }
     SelectObject(hdc, hOldFont);
 }
+
 void DrawMenuItem(HDC hdc, RECT rc, const std::wstring& text, bool isSelected, bool isChecked, bool isDisabled, bool isTrayHideOverlay) {
     bool isTrayMenuItem = isTrayHideOverlay || text == L"Settings" || text == L"Quit";
     FillRect(hdc, &rc, g_hMenuBackgroundBrush.get());
@@ -529,13 +575,16 @@ void DrawMenuItem(HDC hdc, RECT rc, const std::wstring& text, bool isSelected, b
     DrawText(hdc, text.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hOldFont);
 }
+
 void CreateOwnerDrawMenu(HMENU hMenu, int position, UINT id, const wchar_t* text) {
     MENUITEMINFO mii = {0}; mii.cbSize = sizeof(MENUITEMINFO); mii.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE | MIIM_DATA; mii.fType = MFT_OWNERDRAW; mii.wID = id; mii.dwTypeData = (LPWSTR)text; mii.dwItemData = (ULONG_PTR)text; InsertMenuItem(hMenu, position, TRUE, &mii);
 }
+
 void UpdateAllButtons() {
     if (g_hTabButton1) InvalidateRect(g_hTabButton1, NULL, TRUE); if (g_hTabButton2) InvalidateRect(g_hTabButton2, NULL, TRUE); if (g_hTabButton3) InvalidateRect(g_hTabButton3, NULL, TRUE);
     if (g_hBrowseButton) InvalidateRect(g_hBrowseButton, NULL, TRUE); if (g_hThemeButton) InvalidateRect(g_hThemeButton, NULL, TRUE); if (g_hHideOverlayCheckbox) InvalidateRect(g_hHideOverlayCheckbox, NULL, TRUE);
 }
+
 LRESULT HandleOwnerDrawButton(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, int buttonId) {
     static bool isPressed = false;
     switch (msg) {
@@ -545,6 +594,7 @@ LRESULT HandleOwnerDrawButton(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
         case WM_ERASEBKGND: return 1;
     } return DefWindowProc(hwnd, msg, wParam, lParam);
 }
+
 LRESULT HandleOwnerDrawCheckbox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_LBUTTONDOWN: InvalidateRect(hwnd,NULL,TRUE); SetCapture(hwnd); break;
@@ -553,6 +603,7 @@ LRESULT HandleOwnerDrawCheckbox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_ERASEBKGND: return 1;
     } return DefWindowProc(hwnd, msg, wParam, lParam);
 }
+
 LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, int listType) {
     switch (msg) {
         case WM_SETCURSOR: SetCursor(LoadCursor(NULL,IDC_ARROW)); return TRUE;
@@ -561,7 +612,7 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             SetFocus(hwnd); RECT rc; GetClientRect(hwnd,&rc); int yPos = GET_Y_LPARAM(lParam); int visibleItems = (listType==ID_IMAGE_LIST)?VISIBLE_ITEMS_IMAGES:VISIBLE_ITEMS_MONITORS; int startIdx = (listType==ID_IMAGE_LIST)?g_imageListScrollPos:g_monitorListScrollPos; int itemIndex = startIdx + (yPos-2)/ITEM_HEIGHT; int itemCount = (listType==ID_IMAGE_LIST)?(int)g_imageFiles.size():(int)g_monitors.size(); if (itemIndex>=0 && itemIndex<itemCount && itemIndex>=startIdx && itemIndex<startIdx+visibleItems) { if (listType==ID_IMAGE_LIST) g_imageListSelected = itemIndex; else g_monitorListSelected = itemIndex; InvalidateRect(hwnd,NULL,TRUE); } return 0;
         }
         case WM_LBUTTONDBLCLK: {
-            RECT rc; GetClientRect(hwnd,&rc); int yPos = GET_Y_LPARAM(lParam); int visibleItems = (listType==ID_IMAGE_LIST)?VISIBLE_ITEMS_IMAGES:VISIBLE_ITEMS_MONITORS; int startIdx = (listType==ID_IMAGE_LIST)?g_imageListScrollPos:g_monitorListScrollPos; int itemIndex = startIdx + (yPos-2)/ITEM_HEIGHT; int itemCount = (listType==ID_IMAGE_LIST)?(int)g_imageFiles.size():(int)g_monitors.size(); if (itemIndex>=0 && itemIndex<itemCount && itemIndex>=startIdx && itemIndex<startIdx+visibleItems) { if (listType==ID_IMAGE_LIST) { g_imageListSelected = itemIndex; CreateOverlayWindow(g_imageFiles[itemIndex].path); } else { g_monitorListSelected = itemIndex; g_selectedMonitor = itemIndex; CorrectOffsetValues(); SaveAllSettingsToIni(); UpdateOffsetBoundsDisplay(); if (g_currentOverlay) { UpdateOverlayPosition(); RenderOverlay(); g_currentMonitor = g_selectedMonitor; } } InvalidateRect(hwnd,NULL,TRUE); } return 0;
+            RECT rc; GetClientRect(hwnd,&rc); int yPos = GET_Y_LPARAM(lParam); int visibleItems = (listType==ID_IMAGE_LIST)?VISIBLE_ITEMS_IMAGES:VISIBLE_ITEMS_MONITORS; int startIdx = (listType==ID_IMAGE_LIST)?g_imageListScrollPos:g_monitorListScrollPos; int itemIndex = startIdx + (yPos-2)/ITEM_HEIGHT; int itemCount = (listType==ID_IMAGE_LIST)?(int)g_imageFiles.size():(int)g_monitors.size(); if (itemIndex>=0 && itemIndex<itemCount && itemIndex>=startIdx && itemIndex<startIdx+visibleItems) { if (listType==ID_IMAGE_LIST) { g_imageListSelected = itemIndex; CreateOverlayWindow(g_imageFiles[itemIndex].path); } else { g_monitorListSelected = itemIndex; g_selectedMonitor = itemIndex; CorrectOffsetValues(); UpdateOffsetBoundsDisplay(); if (g_currentOverlay) { UpdateOverlayPosition(); RenderOverlay(); g_currentMonitor = g_selectedMonitor; } g_settingsChanged = true; } InvalidateRect(hwnd,NULL,TRUE); } return 0;
         }
         case WM_RBUTTONDOWN: if (listType==ID_IMAGE_LIST) { RECT rc; GetClientRect(hwnd,&rc); int yPos = GET_Y_LPARAM(lParam); int startIdx = g_imageListScrollPos; int itemIndex = startIdx + (yPos-2)/ITEM_HEIGHT; if (itemIndex>=0 && itemIndex<(int)g_imageFiles.size() && itemIndex>=startIdx && itemIndex<startIdx+VISIBLE_ITEMS_IMAGES) { g_imageListSelected = itemIndex; InvalidateRect(hwnd,NULL,TRUE); UpdateWindow(hwnd); POINT pt = {GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)}; ClientToScreen(hwnd,&pt); HMENU hMenu = CreatePopupMenu(); CreateOwnerDrawMenu(hMenu,0,ID_CONTEXT_OPEN,L"Open File Location"); CreateOwnerDrawMenu(hMenu,1,ID_CONTEXT_REMOVE,L"Remove From Image List"); SetForegroundWindow(g_hwnd); TrackPopupMenu(hMenu,TPM_LEFTALIGN|TPM_LEFTBUTTON,pt.x,pt.y,0,g_hwnd,NULL); DestroyMenu(hMenu); } } return 0;
         case WM_MOUSEWHEEL: {
@@ -571,27 +622,36 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         case WM_ERASEBKGND: return 1;
     } return DefWindowProc(hwnd, msg, wParam, lParam);
 }
+
 void ApplyOffsetFromField(EditField* field, bool isX) {
+    int oldX = g_offsetX, oldY = g_offsetY;
     int value = 0; try { if (!field->text.empty()) value = std::stoi(field->text); } catch(...) { value = 0; }
     if (value > 9999) value = 9999; if (value < -9999) value = -9999;
     if (isX) g_offsetX = value; else g_offsetY = value;
     CorrectOffsetValues();
 }
+
 void ApplyScaleFromField(EditField* field) {
+    float old = g_imageScale;
     float value = 1.0f; try { if (!field->text.empty()) value = std::stof(field->text); } catch(...) { value = 1.0f; }
     if (value < 0.0f) value = 0.0f; if (value > 2.0f) value = 2.0f;
     g_imageScale = value;
     CorrectScaleValue();
 }
-void ResetHotkeyField(int fieldId, wchar_t defaultKey, wchar_t& currentKey, wchar_t& lastValidKey, EditField& field, bool showConflictMessage) {
+
+bool ResetHotkeyField(int fieldId, wchar_t defaultKey, wchar_t& currentKey, wchar_t& lastValidKey, EditField& field, bool showConflictMessage) {
+    wchar_t oldKey = currentKey;
     std::wstring conflictAction;
     if (CheckHotkeyConflict(defaultKey, fieldId, conflictAction)) {
         if (showConflictMessage) { std::wstring message = L"Failed to reset hotkey. Key '" + std::wstring(1, defaultKey) + L"' is already used for: " + conflictAction; ShowOwnerDrawMessageBox(g_hwnd, message); }
         field.text = lastValidKey ? std::wstring(1, lastValidKey) : L""; currentKey = lastValidKey;
     } else { currentKey = defaultKey; lastValidKey = defaultKey; field.text = std::wstring(1, defaultKey); }
     field.cursorPos = (int)field.text.length();
+    return oldKey != currentKey;
 }
+
 void ApplyHotkeyFromField(EditField* field, int id) {
+    wchar_t oldToggle = g_toggleHotkeyKey, oldQuit = g_quitHotkeyKey, oldSettings = g_settingsHotkeyKey;
     if (field->text.empty()) { if (id==1) g_toggleHotkeyKey=0; else if (id==2) g_quitHotkeyKey=0; else if (id==3) g_settingsHotkeyKey=0; }
     else {
         wchar_t key = std::towupper(field->text[0]); if (IsValidHotkeyChar(key)) {
@@ -613,19 +673,22 @@ void ApplyHotkeyFromField(EditField* field, int id) {
     }
     field->cursorPos = (int)field->text.length();
 }
+
 void UpdateEditFieldText(EditField* field, const std::wstring& newText) { field->text = newText; field->cursorPos = (int)field->text.length(); }
+
 LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, EditField* field) {
     switch (msg) {
         case WM_SETFOCUS: field->hasFocus = true; InvalidateRect(hwnd,NULL,TRUE); return 0;
         case WM_KILLFOCUS: field->hasFocus = false; InvalidateRect(hwnd,NULL,TRUE);
             switch (field->id) {
-                case ID_OFFSET_X_DISPLAY: ApplyOffsetFromField(field, true); break;
-                case ID_OFFSET_Y_DISPLAY: ApplyOffsetFromField(field, false); break;
-                case ID_SIZE_DISPLAY: ApplyScaleFromField(field); break;
-                case ID_HOTKEY_TOGGLE_DISPLAY: ApplyHotkeyFromField(field, 1); break;
-                case ID_HOTKEY_SETTINGS_DISPLAY: ApplyHotkeyFromField(field, 3); break;
-                case ID_HOTKEY_QUIT_DISPLAY: ApplyHotkeyFromField(field, 2); break;
-            } RegisterHotkeys(); SaveAllSettingsToIni(); if (!g_lastDisplayedImage.empty()) CreateOverlayWindow(g_lastDisplayedImage); return 0;
+                case ID_OFFSET_X_DISPLAY: ApplyOffsetFromField(field, true); g_settingsChanged = true; break;
+                case ID_OFFSET_Y_DISPLAY: ApplyOffsetFromField(field, false); g_settingsChanged = true; break;
+                case ID_SIZE_DISPLAY: ApplyScaleFromField(field); g_settingsChanged = true; break;
+                case ID_HOTKEY_TOGGLE_DISPLAY: { wchar_t old = g_toggleHotkeyKey; ApplyHotkeyFromField(field, 1); if (old != g_toggleHotkeyKey) { RegisterHotkeys(); g_settingsChanged = true; } } break;
+                case ID_HOTKEY_SETTINGS_DISPLAY: { wchar_t old = g_settingsHotkeyKey; ApplyHotkeyFromField(field, 3); if (old != g_settingsHotkeyKey) { RegisterHotkeys(); g_settingsChanged = true; } } break;
+                case ID_HOTKEY_QUIT_DISPLAY: { wchar_t old = g_quitHotkeyKey; ApplyHotkeyFromField(field, 2); if (old != g_quitHotkeyKey) { RegisterHotkeys(); g_settingsChanged = true; } } break;
+            }
+            return 0;
         case WM_KEYDOWN: switch (wParam) {
             case VK_LEFT: if (field->cursorPos>0) { field->cursorPos--; InvalidateRect(hwnd,NULL,TRUE); } return 0;
             case VK_RIGHT: if (field->cursorPos<(int)field->text.length()) { field->cursorPos++; InvalidateRect(hwnd,NULL,TRUE); } return 0;
@@ -651,7 +714,9 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
         case WM_SETCURSOR: SetCursor(LoadCursor(NULL,IDC_IBEAM)); return TRUE;
     } return DefWindowProc(hwnd, msg, wParam, lParam);
 }
+
 WNDPROC g_oldImageListProc = NULL, g_oldMonitorListProc = NULL, g_oldOffsetXProc = NULL, g_oldOffsetYProc = NULL, g_oldSizeProc = NULL, g_oldHotkeyToggleProc = NULL, g_oldHotkeySettingsProc = NULL, g_oldHotkeyQuitProc = NULL;
+
 LRESULT CALLBACK ImageListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) { return HandleOwnerDrawListBox(hwnd,msg,wParam,lParam,ID_IMAGE_LIST); }
 LRESULT CALLBACK MonitorListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) { return HandleOwnerDrawListBox(hwnd,msg,wParam,lParam,ID_MONITOR_LIST); }
 LRESULT CALLBACK OffsetXSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) { return HandleOwnerDrawEdit(hwnd,msg,wParam,lParam,&g_offsetXField); }
@@ -660,19 +725,23 @@ LRESULT CALLBACK SizeSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 LRESULT CALLBACK HotkeyToggleSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) { return HandleOwnerDrawEdit(hwnd,msg,wParam,lParam,&g_hotkeyToggleField); }
 LRESULT CALLBACK HotkeySettingsSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) { return HandleOwnerDrawEdit(hwnd,msg,wParam,lParam,&g_hotkeySettingsField); }
 LRESULT CALLBACK HotkeyQuitSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) { return HandleOwnerDrawEdit(hwnd,msg,wParam,lParam,&g_hotkeyQuitField); }
+
 void AddImageToList(const std::wstring& filePath, bool saveToIni) {
     if (!IsSupportedImageFormat(filePath)) { ShowOwnerDrawMessageBox(g_hwnd, L"Invalid format. Supported formats: .png, .jpg, .jpeg, .gif"); return; }
     DWORD attrs = GetFileAttributesW(filePath.c_str()); if (attrs == INVALID_FILE_ATTRIBUTES) { ShowOwnerDrawMessageBox(g_hwnd, L"Failed to load image"); return; }
     for (const auto& img : g_imageFiles) if (img.path == filePath) return;
     ImageFile newImage; newImage.path = filePath; size_t lastSlash = filePath.find_last_of(L"\\/"); newImage.filename = (lastSlash != std::wstring::npos) ? filePath.substr(lastSlash+1) : filePath; g_imageFiles.push_back(newImage);
-    if (g_hImageList) InvalidateRect(g_hImageList, NULL, TRUE); if (saveToIni) SaveAllSettingsToIni();
+    if (g_hImageList) InvalidateRect(g_hImageList, NULL, TRUE); if (saveToIni) g_settingsChanged = true;
 }
+
 void LoadAllSettingsFromIni() {
     std::wstring iniPath = GetIniFilePath(); DWORD attrs = GetFileAttributesW(iniPath.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) {
         int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN); g_windowX = (sw-300)/2; g_windowY = (sh-300)/2;
         g_toggleHotkeyKey = DEFAULT_TOGGLE_KEY; g_quitHotkeyKey = DEFAULT_QUIT_KEY; g_settingsHotkeyKey = DEFAULT_SETTINGS_KEY; g_darkTheme = false;
-        g_lastValidToggleKey = DEFAULT_TOGGLE_KEY; g_lastValidQuitKey = DEFAULT_QUIT_KEY; g_lastValidSettingsKey = DEFAULT_SETTINGS_KEY; return;
+        g_lastValidToggleKey = DEFAULT_TOGGLE_KEY; g_lastValidQuitKey = DEFAULT_QUIT_KEY; g_lastValidSettingsKey = DEFAULT_SETTINGS_KEY; 
+        g_settingsChanged = false;
+        return;
     }
     wchar_t themeStr[10]; GetPrivateProfileStringW(L"Window",L"Theme",L"Light",themeStr,10,iniPath.c_str()); g_darkTheme = (wcscmp(themeStr,L"Dark")==0);
     wchar_t countStr[10]; GetPrivateProfileStringW(L"Images List",L"Count",L"0",countStr,10,iniPath.c_str()); int count = _wtoi(countStr);
@@ -686,7 +755,9 @@ void LoadAllSettingsFromIni() {
     wchar_t settingsKeyStr[10]; GetPrivateProfileStringW(L"Hotkeys",L"Settings",std::wstring(1,DEFAULT_SETTINGS_KEY).c_str(),settingsKeyStr,10,iniPath.c_str()); if (wcslen(settingsKeyStr)>0) { wchar_t key = std::towupper(settingsKeyStr[0]); if (IsValidHotkeyChar(key)) { g_settingsHotkeyKey = key; g_lastValidSettingsKey = key; UpdateEditFieldText(&g_hotkeySettingsField,std::wstring(1,key)); } else { g_settingsHotkeyKey = DEFAULT_SETTINGS_KEY; g_lastValidSettingsKey = DEFAULT_SETTINGS_KEY; UpdateEditFieldText(&g_hotkeySettingsField,std::wstring(1,DEFAULT_SETTINGS_KEY)); WritePrivateProfileStringW(L"Hotkeys",L"Settings",std::wstring(1,DEFAULT_SETTINGS_KEY).c_str(),iniPath.c_str()); } }
     wchar_t quitKeyStr[10]; GetPrivateProfileStringW(L"Hotkeys",L"Quit",std::wstring(1,DEFAULT_QUIT_KEY).c_str(),quitKeyStr,10,iniPath.c_str()); if (wcslen(quitKeyStr)>0) { wchar_t key = std::towupper(quitKeyStr[0]); if (IsValidHotkeyChar(key)) { g_quitHotkeyKey = key; g_lastValidQuitKey = key; UpdateEditFieldText(&g_hotkeyQuitField,std::wstring(1,key)); } else { g_quitHotkeyKey = DEFAULT_QUIT_KEY; g_lastValidQuitKey = DEFAULT_QUIT_KEY; UpdateEditFieldText(&g_hotkeyQuitField,std::wstring(1,DEFAULT_QUIT_KEY)); WritePrivateProfileStringW(L"Hotkeys",L"Quit",std::wstring(1,DEFAULT_QUIT_KEY).c_str(),iniPath.c_str()); } }
     wchar_t windowXStr[32], windowYStr[32]; GetPrivateProfileStringW(L"Window",L"WindowX",L"-32768",windowXStr,32,iniPath.c_str()); GetPrivateProfileStringW(L"Window",L"WindowY",L"-32768",windowYStr,32,iniPath.c_str()); g_windowX = _wtoi(windowXStr); g_windowY = _wtoi(windowYStr); if (g_windowX==-32768 || g_windowY==-32768) { int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN); g_windowX = (sw-300)/2; g_windowY = (sh-300)/2; }
+    g_settingsChanged = false;
 }
+
 void SaveAllSettingsToIni() {
     if (!g_hwnd) return; std::wstring iniPath = GetIniFilePath();
     WritePrivateProfileStringW(L"Window",L"Theme",g_darkTheme?L"Dark":L"Light",iniPath.c_str());
@@ -702,41 +773,72 @@ void SaveAllSettingsToIni() {
     wchar_t quitKey[2] = {g_quitHotkeyKey,0}; WritePrivateProfileStringW(L"Hotkeys",L"Quit",g_quitHotkeyKey?quitKey:L"",iniPath.c_str());
     if (g_windowVisible) { RECT wr; GetWindowRect(g_hwnd,&wr); WritePrivateProfileStringW(L"Window",L"WindowX",std::to_wstring(wr.left).c_str(),iniPath.c_str()); WritePrivateProfileStringW(L"Window",L"WindowY",std::to_wstring(wr.top).c_str(),iniPath.c_str()); }
 }
+
 void CorrectOffsetValues() {
     if (g_selectedMonitor >=0 && g_selectedMonitor < (int)g_monitors.size()) {
-        const auto& m = g_monitors[g_selectedMonitor]; int maxX = (m.rect.right - m.rect.left)/2, maxY = (m.rect.bottom - m.rect.top)/2;
+        const auto& m = g_monitors[g_selectedMonitor];
+        int maxX = (m.rect.right - m.rect.left)/2, maxY = (m.rect.bottom - m.rect.top)/2;
         if (g_offsetX > maxX) g_offsetX = maxX; if (g_offsetX < -maxX) g_offsetX = -maxX;
         if (g_offsetY > maxY) g_offsetY = maxY; if (g_offsetY < -maxY) g_offsetY = -maxY;
-        UpdateEditFieldText(&g_offsetXField,std::to_wstring(g_offsetX)); UpdateEditFieldText(&g_offsetYField,std::to_wstring(g_offsetY));
-        if (g_hOffsetXDisplay) InvalidateRect(g_hOffsetXDisplay,NULL,TRUE); if (g_hOffsetYDisplay) InvalidateRect(g_hOffsetYDisplay,NULL,TRUE); SaveAllSettingsToIni();
+        UpdateEditFieldText(&g_offsetXField, std::to_wstring(g_offsetX));
+        UpdateEditFieldText(&g_offsetYField, std::to_wstring(g_offsetY));
+        if (g_hOffsetXDisplay) InvalidateRect(g_hOffsetXDisplay, NULL, TRUE);
+        if (g_hOffsetYDisplay) InvalidateRect(g_hOffsetYDisplay, NULL, TRUE);
     }
-    if (g_currentOverlay) { UpdateOverlayPosition(); RenderOverlay(); }
+    if (g_currentOverlay) {
+        UpdateOverlayPosition();
+    }
 }
+
 void CorrectScaleValue() {
     if (g_imageScale < 0.0f) g_imageScale = 0.0f; if (g_imageScale > 2.0f) g_imageScale = 2.0f;
     std::wstringstream ss; ss << std::fixed << std::setprecision(2) << g_imageScale; UpdateEditFieldText(&g_sizeField, ss.str());
-    if (g_hSizeDisplay) InvalidateRect(g_hSizeDisplay,NULL,TRUE); UpdateScaleControls(); SaveAllSettingsToIni();
+    if (g_hSizeDisplay) InvalidateRect(g_hSizeDisplay,NULL,TRUE); UpdateScaleControls();
     if (g_currentOverlay) RenderOverlay();
 }
+
 void SafeGdiplusShutdown() { if (g_gdiplusToken) { GdiplusShutdown(g_gdiplusToken); g_gdiplusToken = 0; } }
+
 void UpdateOverlayPosition() {
     if (!g_currentOverlay) return;
     int windowWidth = 2 * g_originalImageWidth, windowHeight = 2 * g_originalImageHeight, x=0, y=0;
     if (g_selectedMonitor >=0 && g_selectedMonitor < (int)g_monitors.size()) {
-        const auto& m = g_monitors[g_selectedMonitor]; int sw = m.rect.right-m.rect.left, sh = m.rect.bottom-m.rect.top;
-        x = m.rect.left + (sw-windowWidth)/2 + g_offsetX; y = m.rect.top + (sh-windowHeight)/2 + g_offsetY;
-    } else { int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN); x = (sw-windowWidth)/2 + g_offsetX; y = (sh-windowHeight)/2 + g_offsetY; }
+        const auto& m = g_monitors[g_selectedMonitor];
+        int sw = m.rect.right-m.rect.left, sh = m.rect.bottom-m.rect.top;
+        x = m.rect.left + (sw-windowWidth)/2 + g_offsetX;
+        y = m.rect.top + (sh-windowHeight)/2 + g_offsetY;
+    } else {
+        int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+        x = (sw-windowWidth)/2 + g_offsetX;
+        y = (sh-windowHeight)/2 + g_offsetY;
+    }
+    RECT currentRect;
+    GetWindowRect(g_currentOverlay, &currentRect);
+    if (currentRect.left == x && currentRect.top == y) return;
     SetWindowPos(g_currentOverlay, NULL, x, y, 0, 0, SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
+    g_overlayX = x;
+    g_overlayY = y;
 }
+
 void RenderOverlayInThread() {
     HANDLE hEvent = g_renderEvent;
     while (!g_renderThreadShouldExit) {
         WaitForSingleObject(hEvent, INFINITE); if (g_renderThreadShouldExit) break;
         HWND hwnd = NULL; int origWidth=0, origHeight=0; float scale=1.0f;
         std::shared_ptr<Bitmap> bitmapCopy; std::shared_ptr<AnimatedGIF> gifCopy;
-        { std::lock_guard<std::mutex> lock(g_renderDataMutex); hwnd = g_currentOverlay; origWidth = g_originalImageWidth; origHeight = g_originalImageHeight; scale = g_imageScale; bitmapCopy = g_cachedBitmapShared; gifCopy = g_animatedGIFShared; }
+        int overlayX, overlayY;
+        { std::lock_guard<std::mutex> lock(g_renderDataMutex);
+            hwnd = g_currentOverlay;
+            origWidth = g_originalImageWidth;
+            origHeight = g_originalImageHeight;
+            scale = g_imageScale;
+            bitmapCopy = g_cachedBitmapShared;
+            gifCopy = g_animatedGIFShared;
+            overlayX = g_overlayX.load();
+            overlayY = g_overlayY.load();
+        }
         if (!hwnd || !IsWindow(hwnd)) continue;
-        RECT windowRect; GetWindowRect(hwnd, &windowRect); int windowWidth = windowRect.right-windowRect.left, windowHeight = windowRect.bottom-windowRect.top;
+        int windowWidth = 2 * origWidth, windowHeight = 2 * origHeight;
         int drawWidth = (int)(origWidth * scale), drawHeight = (int)(origHeight * scale), drawX = (windowWidth - drawWidth)/2, drawY = (windowHeight - drawHeight)/2;
         HDC hdcScreen = GetDC(NULL); if (!hdcScreen) continue;
         HDC hdcMem = CreateCompatibleDC(hdcScreen); if (!hdcMem) { ReleaseDC(NULL,hdcScreen); continue; }
@@ -756,19 +858,24 @@ void RenderOverlayInThread() {
         } else if (bitmapCopy) { Rect destRect(drawX, drawY, drawWidth, drawHeight); graphics.DrawImage(bitmapCopy.get(), destRect); success = true; }
         if (success) {
             BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-            POINT ptPos = { windowRect.left, windowRect.top }; SIZE sizeWnd = { windowWidth, windowHeight }; POINT ptSrc = {0,0};
+            POINT ptPos = { overlayX, overlayY };
+            SIZE sizeWnd = { windowWidth, windowHeight }; POINT ptSrc = {0,0};
             UpdateLayeredWindow(hwnd, hdcScreen, &ptPos, &sizeWnd, hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
         }
         SelectObject(hdcMem, hOldBitmap); DeleteObject(hBitmap); DeleteDC(hdcMem); ReleaseDC(NULL, hdcScreen);
     }
 }
+
 void StartRenderThread() {
     if (!g_renderThreadRunning) { g_renderEvent = CreateEvent(NULL, FALSE, FALSE, NULL); g_renderThreadShouldExit = false; g_renderThreadRunning = true; g_renderThread = std::thread(RenderOverlayInThread); }
 }
+
 void StopRenderThread() {
     if (g_renderThreadRunning) { g_renderThreadShouldExit = true; SetEvent(g_renderEvent); if (g_renderThread.joinable()) g_renderThread.join(); g_renderThreadRunning = false; if (g_renderEvent) { CloseHandle(g_renderEvent); g_renderEvent = NULL; } }
 }
+
 void RenderOverlay() { SetEvent(g_renderEvent); }
+
 void OnScaleChangedDelayed() {
     if (g_animatedGIFShared) {
         g_animatedGIFShared->ClearCache();
@@ -776,6 +883,7 @@ void OnScaleChangedDelayed() {
     }
     g_scaleTimerActive = false;
 }
+
 LRESULT CALLBACK OverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_TIMER:
@@ -787,10 +895,18 @@ LRESULT CALLBACK OverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 OnScaleChangedDelayed();
             }
             return 0;
+        case WM_MOVE:
+        case WM_WINDOWPOSCHANGED: {
+            RECT rc; GetWindowRect(hwnd, &rc);
+            g_overlayX = rc.left;
+            g_overlayY = rc.top;
+            return 0;
+        }
         case WM_DESTROY: return 0;
     } return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
-void CreateOverlayWindow(const std::wstring& imagePath) {
+
+void CreateOverlayWindow(const std::wstring& imagePath, bool saveToIni) {
     if (imagePath.empty()) return;
     bool destroyOldWindow = (g_currentOverlay != NULL && g_lastDisplayedImage != imagePath);
     if (destroyOldWindow) {
@@ -811,7 +927,7 @@ void CreateOverlayWindow(const std::wstring& imagePath) {
     int windowWidth = 2 * g_originalImageWidth, windowHeight = 2 * g_originalImageHeight;
     bool needNewWindow = (g_currentOverlay == NULL);
     if (!needNewWindow) {
-        if (g_selectedMonitor != g_currentMonitor) { UpdateOverlayPosition(); g_currentMonitor = g_selectedMonitor; SaveAllSettingsToIni(); }
+        if (g_selectedMonitor != g_currentMonitor) { UpdateOverlayPosition(); g_currentMonitor = g_selectedMonitor; }
         else { RECT cr; GetWindowRect(g_currentOverlay, &cr); int cw = cr.right-cr.left, ch = cr.bottom-cr.top; if (cw!=windowWidth || ch!=windowHeight) { SetWindowPos(g_currentOverlay, NULL, 0,0,windowWidth,windowHeight, SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE); UpdateOverlayPosition(); } }
     }
     if (needNewWindow) {
@@ -824,25 +940,33 @@ void CreateOverlayWindow(const std::wstring& imagePath) {
         if (!registered) { WNDCLASS wc = {}; wc.lpfnWndProc = OverlayProc; wc.hInstance = GetModuleHandle(NULL); wc.lpszClassName = L"CustomOverlayWindow"; RegisterClass(&wc); registered = true; }
         g_currentOverlay = CreateWindowEx(WS_EX_LAYERED|WS_EX_TOPMOST|WS_EX_TRANSPARENT|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE, L"CustomOverlayWindow", NULL, WS_POPUP, x, y, windowWidth, windowHeight, NULL, NULL, GetModuleHandle(NULL), NULL);
         if (!g_currentOverlay) return;
+        g_overlayX = x;
+        g_overlayY = y;
         if (!g_hideOverlay) { ShowWindow(g_currentOverlay, SW_SHOWNA); SetWindowPos(g_currentOverlay, HWND_TOPMOST, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE); }
     }
     StartRenderThread();
     std::shared_ptr<AnimatedGIF> gif; { std::lock_guard<std::mutex> lock(g_renderDataMutex); gif = g_animatedGIFShared; }
     if (gif && gif->IsInitialized() && gif->IsAnimated()) gif->StartAnimation(g_currentOverlay);
-    RenderOverlay(); SaveAllSettingsToIni();
+    RenderOverlay();
+    if (saveToIni) g_settingsChanged = true;
 }
-void RestoreLastOverlay() { if (!g_lastDisplayedImage.empty() && GetFileAttributesW(g_lastDisplayedImage.c_str())!=INVALID_FILE_ATTRIBUTES) CreateOverlayWindow(g_lastDisplayedImage); }
+
+void RestoreLastOverlay() { if (!g_lastDisplayedImage.empty() && GetFileAttributesW(g_lastDisplayedImage.c_str())!=INVALID_FILE_ATTRIBUTES) CreateOverlayWindow(g_lastDisplayedImage, false); }
+
 void BrowseForImage() {
     OPENFILENAMEW ofn = {0}; wchar_t szFile[MAX_PATH] = {0}; ofn.lStructSize = sizeof(OPENFILENAMEW); ofn.hwndOwner = g_hwnd; ofn.lpstrFile = szFile; ofn.nMaxFile = MAX_PATH; ofn.lpstrFilter = L"Images\0*.png;*.jpg;*.jpeg;*.gif\0All Files\0*.*\0"; ofn.nFilterIndex = 1; ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
     if (GetOpenFileNameW(&ofn)) AddImageToList(szFile, true);
 }
+
 void OpenFileLocation(const std::wstring& filePath) { std::wstring params = L"/select,\"" + filePath + L"\""; ShellExecute(NULL, L"open", L"explorer.exe", params.c_str(), NULL, SW_SHOW); }
+
 void RemoveImageFromList(int index) {
     if (index<0 || index>=(int)g_imageFiles.size()) return;
     if (g_imageFiles[index].path == g_lastDisplayedImage) { g_lastDisplayedImage.clear(); if (g_currentOverlay) DestroyWindow(g_currentOverlay); g_currentOverlay = NULL; { std::lock_guard<std::mutex> lock(g_renderDataMutex); g_cachedBitmapShared.reset(); g_animatedGIFShared.reset(); g_originalImageWidth=g_originalImageHeight=0; } StopRenderThread(); }
     g_imageFiles.erase(g_imageFiles.begin()+index); if (g_imageListSelected>=index) { if (g_imageListSelected>0) g_imageListSelected--; else g_imageListSelected=-1; }
-    if (g_hImageList) InvalidateRect(g_hImageList,NULL,TRUE); SaveAllSettingsToIni();
+    if (g_hImageList) InvalidateRect(g_hImageList,NULL,TRUE); g_settingsChanged = true;
 }
+
 void UpdateHideOverlayCheckbox() { if (g_hHideOverlayCheckbox) InvalidateRect(g_hHideOverlayCheckbox,NULL,TRUE); }
 void UpdateMonitorSelection() { g_monitorListSelected = g_selectedMonitor; if (g_hMonitorList) InvalidateRect(g_hMonitorList,NULL,TRUE); }
 void UpdateImageSelection() { if (!g_lastDisplayedImage.empty()) for (int i=0; i<(int)g_imageFiles.size(); i++) if (g_imageFiles[i].path == g_lastDisplayedImage) { g_imageListSelected = i; if (g_hImageList) InvalidateRect(g_hImageList,NULL,TRUE); return; } }
@@ -851,6 +975,7 @@ void UpdateScaleControls() { int sliderValue = (int)(g_imageScale*100.0f+0.5f); 
 void UpdateHotkeyEdits() { UpdateEditFieldText(&g_hotkeyToggleField,std::wstring(1,g_toggleHotkeyKey)); UpdateEditFieldText(&g_hotkeySettingsField,std::wstring(1,g_settingsHotkeyKey)); UpdateEditFieldText(&g_hotkeyQuitField,std::wstring(1,g_quitHotkeyKey)); if (g_hHotkeyToggleDisplay) InvalidateRect(g_hHotkeyToggleDisplay,NULL,TRUE); if (g_hHotkeySettingsDisplay) InvalidateRect(g_hHotkeySettingsDisplay,NULL,TRUE); if (g_hHotkeyQuitDisplay) InvalidateRect(g_hHotkeyQuitDisplay,NULL,TRUE); }
 void UnregisterHotkeys() { if (g_hwnd) { UnregisterHotKey(g_hwnd,1); UnregisterHotKey(g_hwnd,2); UnregisterHotKey(g_hwnd,3); } }
 bool RegisterHotkeys() { UnregisterHotkeys(); if (!g_hwnd) return false; if (g_toggleHotkeyKey && !RegisterHotKey(g_hwnd,1,MOD_ALT|MOD_NOREPEAT,g_toggleHotkeyKey)) return false; if (g_quitHotkeyKey && !RegisterHotKey(g_hwnd,2,MOD_ALT|MOD_NOREPEAT,g_quitHotkeyKey)) return false; if (g_settingsHotkeyKey && !RegisterHotKey(g_hwnd,3,MOD_ALT|MOD_NOREPEAT,g_settingsHotkeyKey)) return false; return true; }
+
 void ToggleHideOverlay() {
     g_hideOverlay = !g_hideOverlay;
     if (g_currentOverlay) {
@@ -858,8 +983,9 @@ void ToggleHideOverlay() {
         if (!g_hideOverlay) { SetWindowPos(g_currentOverlay, HWND_TOPMOST, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE); std::shared_ptr<AnimatedGIF> gif; { std::lock_guard<std::mutex> lock(g_renderDataMutex); gif = g_animatedGIFShared; } if (gif && gif->IsInitialized() && gif->IsAnimated()) gif->StartAnimation(g_currentOverlay); RenderOverlay(); }
         else { std::shared_ptr<AnimatedGIF> gif; { std::lock_guard<std::mutex> lock(g_renderDataMutex); gif = g_animatedGIFShared; } if (gif) gif->StopAnimation(); }
     }
-    UpdateAllButtons(); SaveAllSettingsToIni();
+    UpdateAllButtons(); g_settingsChanged = true;
 }
+
 LRESULT HandleHotkey(WPARAM wParam) {
     switch (wParam) {
         case 1: ToggleHideOverlay(); return 0;
@@ -867,6 +993,7 @@ LRESULT HandleHotkey(WPARAM wParam) {
         case 3: if (!IsWindowVisible(g_hwnd)) { ShowWindow(g_hwnd, SW_RESTORE); ForceForegroundWindow(g_hwnd); g_windowVisible = true; } else { if (IsIconic(g_hwnd)) { ShowWindow(g_hwnd, SW_RESTORE); ForceForegroundWindow(g_hwnd); g_windowVisible = true; } else { if (GetForegroundWindow() == g_hwnd) { ShowWindow(g_hwnd, SW_HIDE); g_windowVisible = false; } else ForceForegroundWindow(g_hwnd); } } return 0;
     } return 0;
 }
+
 void DrawCustomSlider(HDC hdc, RECT rc, int value, bool darkTheme, bool enabled) {
     int width = rc.right-rc.left, height = rc.bottom-rc.top, margin=5, visualThumbHalfWidth=4;
     int trackStart=rc.left, trackEnd=rc.right, usableTrackStart=trackStart+margin, usableTrackEnd=trackEnd-margin, usableTrackWidth=usableTrackEnd-usableTrackStart;
@@ -891,12 +1018,14 @@ void DrawCustomSlider(HDC hdc, RECT rc, int value, bool darkTheme, bool enabled)
     Rectangle(hdc, trackStart, rc.top, trackEnd, rc.bottom);
     SelectObject(hdc, hOldPen); SelectObject(hdc, hOldBrush); DeleteObject(hBorder);
 }
+
 LRESULT CALLBACK SliderSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_ERASEBKGND: return 1;
         case WM_PAINT: { PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps); RECT rc; GetClientRect(hwnd, &rc); HDC hdcMem = CreateCompatibleDC(hdc); HBITMAP hBitmap = CreateCompatibleBitmap(hdc, rc.right, rc.bottom); HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap); int sliderValue = (int)(g_imageScale*100.0f+0.5f); DrawCustomSlider(hdcMem, rc, sliderValue, g_darkTheme, IsWindowEnabled(hwnd)); BitBlt(hdc,0,0,rc.right,rc.bottom,hdcMem,0,0,SRCCOPY); SelectObject(hdcMem, hOldBitmap); DeleteObject(hBitmap); DeleteDC(hdcMem); EndPaint(hwnd, &ps); return 0; }
     } return DefWindowProc(hwnd, msg, wParam, lParam);
 }
+
 void ApplyTheme() {
     if (g_darkTheme) {
         g_textColor = RGB(240,240,240); g_buttonTextColor = RGB(240,240,240); g_borderColor = RGB(100,100,100); g_buttonBorderColor = RGB(80,80,80);
@@ -912,8 +1041,11 @@ void ApplyTheme() {
     if (!g_hMenuFont) g_hMenuFont = CreateFont(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_OUTLINE_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,VARIABLE_PITCH,L"Segoe UI");
     if (g_hwnd) { InvalidateRect(g_hwnd,NULL,TRUE); UpdateWindow(g_hwnd); HWND hChild = GetWindow(g_hwnd,GW_CHILD); while (hChild) { InvalidateRect(hChild,NULL,TRUE); hChild = GetWindow(hChild,GW_HWNDNEXT); } UpdateAllButtons(); }
 }
-void ToggleTheme() { g_darkTheme = !g_darkTheme; ApplyTheme(); SaveAllSettingsToIni(); }
+
+void ToggleTheme() { g_darkTheme = !g_darkTheme; ApplyTheme(); g_settingsChanged = true; }
+
 bool IsValidHotkeyChar(wchar_t c) { wchar_t uc = std::towupper(c); return (uc>=L'A'&&uc<=L'Z') || (uc>=L'0'&&uc<=L'9'); }
+
 bool CheckHotkeyConflict(wchar_t newKey, int excludeId, std::wstring& conflictAction) {
     if (newKey==0) return false;
     if (excludeId!=1 && newKey==g_toggleHotkeyKey) { conflictAction = L"Toggle Overlay Visibility"; return true; }
@@ -921,6 +1053,7 @@ bool CheckHotkeyConflict(wchar_t newKey, int excludeId, std::wstring& conflictAc
     if (excludeId!=3 && newKey==g_settingsHotkeyKey) { conflictAction = L"Open/Close Settings"; return true; }
     return false;
 }
+
 void DrawMessageBoxButton(HDC hdc, HWND hwnd, bool isPressed, bool isFocused) {
     RECT rc; GetClientRect(hwnd,&rc); FillRect(hdc,&rc,isPressed?g_hButtonPressedBrush.get():g_hButtonBrush.get());
     HPEN hBorderPen = CreatePen(PS_SOLID,1,isFocused?(g_darkTheme?RGB(255,255,255):RGB(0,0,0)):g_buttonBorderColor); HPEN hOldPen = (HPEN)SelectObject(hdc, hBorderPen); HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
@@ -928,6 +1061,7 @@ void DrawMessageBoxButton(HDC hdc, HWND hwnd, bool isPressed, bool isFocused) {
     if (isPressed) OffsetRect(&rc,1,1);
     SetTextColor(hdc, g_buttonTextColor); SetBkMode(hdc, TRANSPARENT); HFONT hOldFont = (HFONT)SelectObject(hdc, g_hTabFont); DrawText(hdc, L"OK", -1, &rc, DT_CENTER|DT_VCENTER|DT_SINGLELINE); SelectObject(hdc, hOldFont);
 }
+
 LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     static bool buttonPressed=false, buttonFocused=true;
     switch (uMsg) {
@@ -946,6 +1080,7 @@ LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LP
         case WM_DESTROY: { RemoveProp(hwnd, L"MessageText"); std::wstring* pMessage = (std::wstring*)GetWindowLongPtr(hwnd,GWLP_USERDATA); if (pMessage) delete pMessage; int remaining = GetOpenMessageBoxCount()-1; if (remaining>0) ActivateNextMessageBox(hwnd); else { EnableWindow(g_hwnd, TRUE); ForceForegroundWindow(g_hwnd); } } break;
     } return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
+
 void ShowOwnerDrawMessageBox(HWND hwndParent, const std::wstring& message) {
     static bool registered = false;
     if (!registered) { WNDCLASS wc = {}; wc.lpfnWndProc = OwnerDrawMessageBoxProc; wc.hInstance = GetModuleHandle(NULL); wc.lpszClassName = L"OwnerDrawMessageBox"; wc.hbrBackground = (HBRUSH)(COLOR_WINDOW+1); wc.hCursor = LoadCursor(NULL,IDC_ARROW); RegisterClass(&wc); registered = true; }
@@ -957,6 +1092,7 @@ void ShowOwnerDrawMessageBox(HWND hwndParent, const std::wstring& message) {
     HWND hButton = CreateWindowW(L"BUTTON", L"OK", WS_VISIBLE|WS_CHILD|BS_OWNERDRAW, w/2-30, h-60, 60, 25, hMsgBox, (HMENU)1, GetModuleHandle(NULL), NULL);
     SendMessage(hButton, WM_SETFONT, (WPARAM)g_hTabFont, TRUE); ShowWindow(hMsgBox, SW_SHOW); SetFocus(hButton); SetProp(hMsgBox, L"MessageText", (HANDLE)pMessage);
 }
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     static bool dragging = false;
     switch (uMsg) {
@@ -1021,9 +1157,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             case ID_CONTEXT_REMOVE: if (g_imageListSelected>=0) RemoveImageFromList(g_imageListSelected); break;
             case ID_HIDE_OVERLAY_CHECKBOX: if (HIWORD(wParam)==BN_CLICKED) ToggleHideOverlay(); break;
             case ID_THEME_BUTTON: if (HIWORD(wParam)==BN_CLICKED) ToggleTheme(); break;
-            case ID_RESET_TOGGLE: ResetHotkeyField(1,DEFAULT_TOGGLE_KEY,g_toggleHotkeyKey,g_lastValidToggleKey,g_hotkeyToggleField); if (g_hHotkeyToggleDisplay) InvalidateRect(g_hHotkeyToggleDisplay,NULL,TRUE); RegisterHotkeys(); SaveAllSettingsToIni(); break;
-            case ID_RESET_SETTINGS: ResetHotkeyField(3,DEFAULT_SETTINGS_KEY,g_settingsHotkeyKey,g_lastValidSettingsKey,g_hotkeySettingsField); if (g_hHotkeySettingsDisplay) InvalidateRect(g_hHotkeySettingsDisplay,NULL,TRUE); RegisterHotkeys(); SaveAllSettingsToIni(); break;
-            case ID_RESET_QUIT: ResetHotkeyField(2,DEFAULT_QUIT_KEY,g_quitHotkeyKey,g_lastValidQuitKey,g_hotkeyQuitField); if (g_hHotkeyQuitDisplay) InvalidateRect(g_hHotkeyQuitDisplay,NULL,TRUE); RegisterHotkeys(); SaveAllSettingsToIni(); break;
+            case ID_RESET_TOGGLE: { wchar_t old = g_toggleHotkeyKey; if (ResetHotkeyField(1,DEFAULT_TOGGLE_KEY,g_toggleHotkeyKey,g_lastValidToggleKey,g_hotkeyToggleField) && g_hHotkeyToggleDisplay) InvalidateRect(g_hHotkeyToggleDisplay,NULL,TRUE); RegisterHotkeys(); if (old != g_toggleHotkeyKey) g_settingsChanged = true; } break;
+            case ID_RESET_SETTINGS: { wchar_t old = g_settingsHotkeyKey; if (ResetHotkeyField(3,DEFAULT_SETTINGS_KEY,g_settingsHotkeyKey,g_lastValidSettingsKey,g_hotkeySettingsField) && g_hHotkeySettingsDisplay) InvalidateRect(g_hHotkeySettingsDisplay,NULL,TRUE); RegisterHotkeys(); if (old != g_settingsHotkeyKey) g_settingsChanged = true; } break;
+            case ID_RESET_QUIT: { wchar_t old = g_quitHotkeyKey; if (ResetHotkeyField(2,DEFAULT_QUIT_KEY,g_quitHotkeyKey,g_lastValidQuitKey,g_hotkeyQuitField) && g_hHotkeyQuitDisplay) InvalidateRect(g_hHotkeyQuitDisplay,NULL,TRUE); RegisterHotkeys(); if (old != g_quitHotkeyKey) g_settingsChanged = true; } break;
         } return 0;
         case WM_SYSCOMMAND: { UINT nID = wParam & 0xFFF0; if (nID == SC_KEYMENU || nID == SC_MOUSEMENU) return 0; return DefWindowProc(hwnd,uMsg,wParam,lParam); }
         case WM_NCLBUTTONDBLCLK: if (wParam == HTSYSMENU || wParam == HTCAPTION) return 0; return DefWindowProc(hwnd,uMsg,wParam,lParam);
@@ -1061,7 +1197,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             if (g_oldHotkeyToggleProc) SetWindowLongPtr(g_hHotkeyToggleDisplay, GWLP_WNDPROC, (LONG_PTR)g_oldHotkeyToggleProc);
             if (g_oldHotkeySettingsProc) SetWindowLongPtr(g_hHotkeySettingsDisplay, GWLP_WNDPROC, (LONG_PTR)g_oldHotkeySettingsProc);
             if (g_oldHotkeyQuitProc) SetWindowLongPtr(g_hHotkeyQuitDisplay, GWLP_WNDPROC, (LONG_PTR)g_oldHotkeyQuitProc);
-            StopRenderThread(); UnregisterHotkeys(); SaveAllSettingsToIni(); Shell_NotifyIcon(NIM_DELETE, &nid); if (nid.hIcon) DestroyIcon(nid.hIcon);
+            StopRenderThread(); UnregisterHotkeys(); 
+            if (g_settingsChanged) SaveAllSettingsToIni();
+            Shell_NotifyIcon(NIM_DELETE, &nid); if (nid.hIcon) DestroyIcon(nid.hIcon);
             { std::lock_guard<std::mutex> lock(g_renderDataMutex); g_cachedBitmapShared.reset(); g_animatedGIFShared.reset(); }
             SafeGdiplusShutdown(); if (g_hTabFont) DeleteObject(g_hTabFont); if (g_hMenuFont) DeleteObject(g_hMenuFont); PostQuitMessage(0); return 0;
         case WM_ERASEBKGND: return 1;
@@ -1119,13 +1257,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             } break;
         }
         case WM_MOUSEMOVE: if (dragging && (wParam & MK_LBUTTON)) { POINT pt = {GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)}; RECT sr; GetWindowRect(g_hSizeSlider,&sr); MapWindowPoints(HWND_DESKTOP,hwnd,(LPPOINT)&sr,2); int margin=5; int trackStart = sr.left+margin, trackEnd = sr.right-margin, trackWidth = trackEnd-trackStart, clickX = pt.x; if (clickX<trackStart) clickX=trackStart; if (clickX>trackEnd) clickX=trackEnd; int newValue = ((clickX-trackStart)*200)/trackWidth; if (newValue<0) newValue=0; if (newValue>200) newValue=200; float newScale = newValue/100.0f; if (fabs(g_imageScale-newScale)>0.001f) { g_imageScale = newScale; UpdateScaleControls(); RenderOverlay(); if (g_scaleTimerActive) KillTimer(hwnd, ID_SCALE_DELAY_TIMER); g_scaleTimerActive = true; SetTimer(hwnd, ID_SCALE_DELAY_TIMER, 200, NULL); } } break;
-        case WM_LBUTTONUP: if (dragging) { dragging = false; ReleaseCapture(); SaveAllSettingsToIni(); } break;
+        case WM_LBUTTONUP: if (dragging) { dragging = false; ReleaseCapture(); g_settingsChanged = true; } break;
         case WM_UPDATE_MONITOR_NAMES: if (g_hMonitorList) { InvalidateRect(g_hMonitorList,NULL,TRUE); UpdateWindow(g_hMonitorList); } break;
     } return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
+
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     HANDLE hMutex = CreateMutexW(NULL, TRUE, L"CustomDesktopOverlayMutex");
     if (GetLastError() == ERROR_ALREADY_EXISTS) { if (hMutex) CloseHandle(hMutex); HWND hExistingWnd = FindWindowW(L"Custom Desktop Overlay", NULL); if (hExistingWnd) SendMessage(hExistingWnd, WM_SHOW_AND_MESSAGE, 0, 0); return 0; }
+
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     GdiplusStartupInput gdiplusStartupInput; GdiplusStartup(&g_gdiplusToken, &gdiplusStartupInput, NULL);
     g_hMainIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_MYICON)); if (!g_hMainIcon) g_hMainIcon = LoadIcon(NULL, IDI_APPLICATION);
@@ -1133,5 +1273,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     const wchar_t CLASS_NAME[] = L"Custom Desktop Overlay"; WNDCLASS wc = {}; wc.lpfnWndProc = WindowProc; wc.hInstance = hInstance; wc.lpszClassName = CLASS_NAME; wc.hbrBackground = (HBRUSH)(COLOR_WINDOW+1); wc.hCursor = LoadCursor(NULL,IDC_ARROW); wc.hIcon = g_hMainIcon; if (!RegisterClass(&wc)) return 0;
     g_hwnd = CreateWindowEx(0, CLASS_NAME, L"Custom Desktop Overlay", WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 300, 300, NULL, NULL, hInstance, NULL); if (!g_hwnd) return 0;
     ShowWindow(g_hwnd, SW_HIDE); MSG msg; while (GetMessage(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessage(&msg); }
-    StopRenderThread(); SafeGdiplusShutdown(); CoUninitialize(); if (hMutex) { ReleaseMutex(hMutex); CloseHandle(hMutex); } return 0;
+
+    StopRenderThread(); SafeGdiplusShutdown(); CoUninitialize(); if (hMutex) { ReleaseMutex(hMutex); CloseHandle(hMutex); }
+    return 0;
 }
