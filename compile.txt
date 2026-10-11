@@ -1,0 +1,22 @@
+компиляция без logo
+g++ -O3 -municode -mwindows main.cpp -o CustomDesktopOverlay.exe -static -static-libgcc -static-libstdc++ -lshell32 -lcomctl32 -lgdiplus -lole32 -lwindowscodecs -s -Wl,--strip-all -ffunction-sections -fdata-sections -Wl,--gc-sections
+
+
+
+компиляция logo.ico в resources.o
+windres resources.rc -o resources.o
+
+
+
+компиляция с logo
+g++ -O3 -municode -mwindows main.cpp resources.o -o CustomDesktopOverlay.exe -static -static-libgcc -static-libstdc++ -lshell32 -lcomctl32 -lgdiplus -lole32 -lwindowscodecs -s -Wl,--strip-all -ffunction-sections -fdata-sections -Wl,--gc-sections
+
+
+
+флаги для безопасности
+-Wl,--nxcompat -Wl,--dynamicbase
+
+
+
+финальная агрессивная компиляция с logo
+g++ -O3 -municode -mwindows main.cpp resources.o -o CustomDesktopOverlay.exe -static -static-libgcc -static-libstdc++ -lshell32 -lcomctl32 -lgdiplus -lole32 -lwindowscodecs -s -Wl,--strip-all -ffunction-sections -fdata-sections -Wl,--gc-sections -fno-exceptions -fno-rtti -fno-asynchronous-unwind-tables -fno-ident -flto -fomit-frame-pointer -fvisibility=hidden -pipe -Wl,--nxcompat -Wl,--dynamicbase
