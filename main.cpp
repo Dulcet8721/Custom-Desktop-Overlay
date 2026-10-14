@@ -16,6 +16,7 @@
 #include <shared_mutex>
 #include <atomic>
 #include <map>
+#include <unordered_map>
 #ifndef GET_X_LPARAM
 #define GET_X_LPARAM(lParam) ((int)(short)LOWORD(lParam))
 #endif
@@ -70,6 +71,7 @@ struct EditField {
     int cursorPos;
     UINT id;
     HWND hwnd;
+    bool hover;
 };
 struct GdiObjectDeleter {
     void operator()(HGDIOBJ obj) const {
@@ -86,6 +88,18 @@ struct IconDeleter {
 using UniqueHBrush = std::unique_ptr<std::remove_pointer<HBRUSH>::type, GdiObjectDeleter>;
 using UniqueHIcon = std::unique_ptr<std::remove_pointer<HICON>::type, IconDeleter>;
 using UniqueBitmap = std::unique_ptr<Bitmap>;
+
+struct ButtonState {
+    bool hover;
+    bool pressed;
+};
+struct ListBoxState {
+    int hoverIndex;
+};
+
+std::unordered_map<HWND, ButtonState> g_buttonStates;
+std::unordered_map<HWND, ListBoxState> g_listBoxStates;
+
 class AnimatedGIF {
 private:
     IWICImagingFactory* m_pFactory;
@@ -317,10 +331,11 @@ public:
         m_scaledCacheScale = 0;
     }
 };
-void DrawOwnerDrawButton(HDC hdc, HWND hwnd, bool isPressed, const std::wstring& text, bool isActiveTab);
-void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstring& text);
-void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type);
-void DrawOwnerDrawEdit(HDC hdc, HWND hwnd, EditField* field, bool darkTheme);
+
+void DrawOwnerDrawButton(HDC hdc, HWND hwnd, bool isPressed, const std::wstring& text, bool isActiveTab, bool isHovered);
+void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstring& text, bool isHovered);
+void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type, int hoverIndex);
+void DrawOwnerDrawEdit(HDC hdc, HWND hwnd, EditField* field, bool darkTheme, bool isHovered);
 LRESULT HandleOwnerDrawButton(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, int buttonId);
 LRESULT HandleOwnerDrawCheckbox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, int listType);
@@ -391,10 +406,16 @@ HICON g_hMainIcon = NULL;
 UniqueHBrush g_hBackgroundBrush(nullptr);
 UniqueHBrush g_hButtonBrush(nullptr);
 UniqueHBrush g_hButtonPressedBrush(nullptr);
+UniqueHBrush g_hButtonHoverBrush(nullptr);
+UniqueHBrush g_hCheckboxBrush(nullptr);
+UniqueHBrush g_hCheckboxHoverBrush(nullptr);
 UniqueHBrush g_hActiveTabBrush(nullptr);
 UniqueHBrush g_hMenuBackgroundBrush(nullptr);
+UniqueHBrush g_hMenuSelectedBrush(nullptr);
 UniqueHBrush g_hListBoxBackgroundBrush(nullptr);
 UniqueHBrush g_hListBoxSelectedBrush(nullptr);
+UniqueHBrush g_hListBoxHoverBrush(nullptr);
+UniqueHBrush g_hEditHoverBrush(nullptr);
 bool g_windowVisible = false;
 bool g_hideOverlay = false;
 std::atomic<float> g_imageScale{1.0f};
@@ -435,12 +456,12 @@ int g_monitorListScrollPos = 0;
 const int ITEM_HEIGHT = 16;
 const int VISIBLE_ITEMS_IMAGES = 9;
 const int VISIBLE_ITEMS_MONITORS = 3;
-EditField g_offsetXField = { L"0", false, 0, ID_OFFSET_X_DISPLAY, NULL };
-EditField g_offsetYField = { L"0", false, 0, ID_OFFSET_Y_DISPLAY, NULL };
-EditField g_sizeField = { L"1.00", false, 0, ID_SIZE_DISPLAY, NULL };
-EditField g_hotkeyToggleField = { L"H", false, 0, ID_HOTKEY_TOGGLE_DISPLAY, NULL };
-EditField g_hotkeySettingsField = { L"S", false, 0, ID_HOTKEY_SETTINGS_DISPLAY, NULL };
-EditField g_hotkeyQuitField = { L"Q", false, 0, ID_HOTKEY_QUIT_DISPLAY, NULL };
+EditField g_offsetXField = { L"0", false, 0, ID_OFFSET_X_DISPLAY, NULL, false };
+EditField g_offsetYField = { L"0", false, 0, ID_OFFSET_Y_DISPLAY, NULL, false };
+EditField g_sizeField = { L"1.00", false, 0, ID_SIZE_DISPLAY, NULL, false };
+EditField g_hotkeyToggleField = { L"H", false, 0, ID_HOTKEY_TOGGLE_DISPLAY, NULL, false };
+EditField g_hotkeySettingsField = { L"S", false, 0, ID_HOTKEY_SETTINGS_DISPLAY, NULL, false };
+EditField g_hotkeyQuitField = { L"Q", false, 0, ID_HOTKEY_QUIT_DISPLAY, NULL, false };
 static int g_prevMonitorCount = 0;
 static std::vector<RECT> g_prevMonitorRects;
 std::shared_ptr<Bitmap> g_cachedBitmapShared;
@@ -460,6 +481,25 @@ std::thread g_monitorNamesThread;
 bool g_settingsChanged = false;
 std::atomic<int> g_overlayX = 0;
 std::atomic<int> g_overlayY = 0;
+
+WNDPROC g_oldImageListProc = NULL;
+WNDPROC g_oldMonitorListProc = NULL;
+WNDPROC g_oldOffsetXProc = NULL;
+WNDPROC g_oldOffsetYProc = NULL;
+WNDPROC g_oldSizeProc = NULL;
+WNDPROC g_oldHotkeyToggleProc = NULL;
+WNDPROC g_oldHotkeySettingsProc = NULL;
+WNDPROC g_oldHotkeyQuitProc = NULL;
+WNDPROC g_oldTabButton1Proc = NULL;
+WNDPROC g_oldTabButton2Proc = NULL;
+WNDPROC g_oldTabButton3Proc = NULL;
+WNDPROC g_oldBrowseButtonProc = NULL;
+WNDPROC g_oldThemeButtonProc = NULL;
+WNDPROC g_oldResetToggleProc = NULL;
+WNDPROC g_oldResetSettingsProc = NULL;
+WNDPROC g_oldResetQuitProc = NULL;
+WNDPROC g_oldHideOverlayCheckboxProc = NULL;
+
 LRESULT CALLBACK OverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 std::wstring GetIniFilePath() {
     wchar_t exePath[MAX_PATH] = { 0 };
@@ -757,10 +797,19 @@ bool IsSupportedImageFormat(const std::wstring& filePath) {
         c = towlower(c);
     return ext == L"png" || ext == L"jpg" || ext == L"jpeg" || ext == L"gif";
 }
-void DrawOwnerDrawButton(HDC hdc, HWND hwnd, bool isPressed, const std::wstring& text, bool isActiveTab) {
+void DrawOwnerDrawButton(HDC hdc, HWND hwnd, bool isPressed, const std::wstring& text, bool isActiveTab, bool isHovered) {
     RECT rc;
     GetClientRect(hwnd, &rc);
-    FillRect(hdc, &rc, isActiveTab ? g_hActiveTabBrush.get() : (isPressed ? g_hButtonPressedBrush.get() : g_hButtonBrush.get()));
+    HBRUSH hBrush;
+    if (isActiveTab)
+        hBrush = g_hActiveTabBrush.get();
+    else if (isPressed)
+        hBrush = g_hButtonPressedBrush.get();
+    else if (isHovered)
+        hBrush = g_hButtonHoverBrush.get();
+    else
+        hBrush = g_hButtonBrush.get();
+    FillRect(hdc, &rc, hBrush);
     HPEN hBorderPen = CreatePen(PS_SOLID, 1, g_buttonBorderColor);
     HPEN hOldPen = (HPEN)SelectObject(hdc, hBorderPen);
     HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
@@ -776,7 +825,7 @@ void DrawOwnerDrawButton(HDC hdc, HWND hwnd, bool isPressed, const std::wstring&
     DrawText(hdc, text.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hOldFont);
 }
-void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstring& text) {
+void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstring& text, bool isHovered) {
     RECT rc;
     GetClientRect(hwnd, &rc);
     FillRect(hdc, &rc, g_hBackgroundBrush.get());
@@ -785,9 +834,8 @@ void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstrin
     int checkboxX = rc.left + 2;
     int checkboxY = rc.top + (rc.bottom - rc.top - checkboxSize) / 2;
     RECT checkboxRect = { checkboxX, checkboxY, checkboxX + checkboxSize, checkboxY + checkboxSize };
-    HBRUSH hCheckboxBrush = CreateSolidBrush(g_darkTheme ? RGB(60,60,60) : RGB(220,220,220));
-    FillRect(hdc, &checkboxRect, hCheckboxBrush);
-    DeleteObject(hCheckboxBrush);
+    HBRUSH hCheckBrush = isHovered ? g_hCheckboxHoverBrush.get() : g_hCheckboxBrush.get();
+    FillRect(hdc, &checkboxRect, hCheckBrush);
     HPEN hBorderPen = CreatePen(PS_SOLID, 1, g_darkTheme ? RGB(100,100,100) : RGB(150,150,150));
     HPEN hOldPen = (HPEN)SelectObject(hdc, hBorderPen);
     HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
@@ -813,7 +861,7 @@ void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstrin
     DrawText(hdc, text.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hOldFont);
 }
-void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type) {
+void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type, int hoverIndex) {
     RECT rc;
     GetClientRect(hwnd, &rc);
     FillRect(hdc, &rc, g_hListBoxBackgroundBrush.get());
@@ -832,8 +880,14 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type) {
         int endIdx = std::min(startIdx + VISIBLE_ITEMS_IMAGES, (int)g_imageFiles.size());
         for (int i = startIdx; i < endIdx; i++) {
             RECT itemRect = {rc.left+1, rc.top+1 + (i-startIdx)*ITEM_HEIGHT, rc.right-1, rc.top+1 + (i-startIdx+1)*ITEM_HEIGHT};
+            HBRUSH bgBrush;
             if (i == g_imageListSelected)
-                FillRect(hdc, &itemRect, g_hListBoxSelectedBrush.get());
+                bgBrush = g_hListBoxSelectedBrush.get();
+            else if (i == hoverIndex)
+                bgBrush = g_hListBoxHoverBrush.get();
+            else
+                bgBrush = g_hListBoxBackgroundBrush.get();
+            FillRect(hdc, &itemRect, bgBrush);
             RECT textRect = itemRect;
             textRect.left += 2;
             DrawText(hdc, g_imageFiles[i].filename.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -844,8 +898,14 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type) {
         int endIdx = std::min(startIdx + VISIBLE_ITEMS_MONITORS, (int)g_monitors.size());
         for (int i = startIdx; i < endIdx; i++) {
             RECT itemRect = {rc.left+1, rc.top+1 + (i-startIdx)*ITEM_HEIGHT, rc.right-1, rc.top+1 + (i-startIdx+1)*ITEM_HEIGHT};
+            HBRUSH bgBrush;
             if (i == g_monitorListSelected)
-                FillRect(hdc, &itemRect, g_hListBoxSelectedBrush.get());
+                bgBrush = g_hListBoxSelectedBrush.get();
+            else if (i == hoverIndex)
+                bgBrush = g_hListBoxHoverBrush.get();
+            else
+                bgBrush = g_hListBoxBackgroundBrush.get();
+            FillRect(hdc, &itemRect, bgBrush);
             std::wstring displayText = std::to_wstring(i+1) + L". ";
             if (!g_monitors[i].friendlyName.empty())
                 displayText += g_monitors[i].friendlyName + L" (";
@@ -859,10 +919,11 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type) {
     }
     SelectObject(hdc, hOldFont);
 }
-void DrawOwnerDrawEdit(HDC hdc, HWND hwnd, EditField* field, bool darkTheme) {
+void DrawOwnerDrawEdit(HDC hdc, HWND hwnd, EditField* field, bool darkTheme, bool isHovered) {
     RECT rc;
     GetClientRect(hwnd, &rc);
-    FillRect(hdc, &rc, g_hListBoxBackgroundBrush.get());
+    HBRUSH bgBrush = (isHovered && !field->hasFocus) ? g_hEditHoverBrush.get() : g_hListBoxBackgroundBrush.get();
+    FillRect(hdc, &rc, bgBrush);
     COLORREF borderColor = darkTheme ? RGB(80,80,80) : RGB(150,150,150);
     if (field->hasFocus) borderColor = darkTheme ? RGB(255,255,255) : RGB(0,0,0);
     HPEN hBorderPen = CreatePen(PS_SOLID, 1, borderColor);
@@ -895,7 +956,8 @@ void DrawOwnerDrawEdit(HDC hdc, HWND hwnd, EditField* field, bool darkTheme) {
 }
 void DrawMenuItem(HDC hdc, RECT rc, const std::wstring& text, bool isSelected, bool isChecked, bool isDisabled, bool isTrayHideOverlay) {
     bool isTrayMenuItem = isTrayHideOverlay || text == L"Settings" || text == L"Quit";
-    FillRect(hdc, &rc, g_hMenuBackgroundBrush.get());
+    HBRUSH bgBrush = isSelected ? g_hMenuSelectedBrush.get() : g_hMenuBackgroundBrush.get();
+    FillRect(hdc, &rc, bgBrush);
     if (isTrayMenuItem && isTrayHideOverlay) {
         int checkSize = 13;
         int checkX = rc.left + 5;
@@ -954,16 +1016,39 @@ void UpdateAllButtons() {
         InvalidateRect(g_hHideOverlayCheckbox, NULL, TRUE);
 }
 LRESULT HandleOwnerDrawButton(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, int buttonId) {
-    static bool isPressed = false;
     switch (msg) {
-        case WM_LBUTTONDOWN:
-            isPressed = true;
+        case WM_NCDESTROY:
+            g_buttonStates.erase(hwnd);
+            break;
+        case WM_MOUSEMOVE: {
+            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0 };
+            TrackMouseEvent(&tme);
+            ButtonState& state = g_buttonStates[hwnd];
+            if (!state.hover) {
+                state.hover = true;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        }
+        case WM_MOUSELEAVE: {
+            ButtonState& state = g_buttonStates[hwnd];
+            if (state.hover) {
+                state.hover = false;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        }
+        case WM_LBUTTONDOWN: {
+            ButtonState& state = g_buttonStates[hwnd];
+            state.pressed = true;
             SetCapture(hwnd);
             InvalidateRect(hwnd, NULL, TRUE);
             break;
-        case WM_LBUTTONUP:
-            if (isPressed) {
-                isPressed = false;
+        }
+        case WM_LBUTTONUP: {
+            ButtonState& state = g_buttonStates[hwnd];
+            if (state.pressed) {
+                state.pressed = false;
                 ReleaseCapture();
                 InvalidateRect(hwnd, NULL, TRUE);
                 POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -971,23 +1056,50 @@ LRESULT HandleOwnerDrawButton(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
                 SendMessage(g_hwnd, WM_COMMAND, MAKEWPARAM(buttonId, BN_CLICKED), (LPARAM)hwnd);
             }
             break;
+        }
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
             wchar_t buffer[256];
             GetWindowText(hwnd, buffer, 256);
             bool isActiveTab = (buttonId == ID_TAB_BUTTON1 && g_activeTab == 1) || (buttonId == ID_TAB_BUTTON2 && g_activeTab == 2) || (buttonId == ID_TAB_BUTTON3 && g_activeTab == 3);
-            DrawOwnerDrawButton(hdc, hwnd, isPressed, buffer, isActiveTab);
+            ButtonState& state = g_buttonStates[hwnd];
+            DrawOwnerDrawButton(hdc, hwnd, state.pressed, buffer, isActiveTab, state.hover && !state.pressed && !isActiveTab);
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_LBUTTONDBLCLK:
+            SetCapture(hwnd);
+            g_buttonStates[hwnd].pressed = true;
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
         case WM_ERASEBKGND:
             return 1;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 LRESULT HandleOwnerDrawCheckbox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    static std::unordered_map<HWND, bool> hoverState;
     switch (msg) {
+        case WM_NCDESTROY:
+            hoverState.erase(hwnd);
+            break;
+        case WM_MOUSEMOVE: {
+            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0 };
+            TrackMouseEvent(&tme);
+            if (!hoverState[hwnd]) {
+                hoverState[hwnd] = true;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        }
+        case WM_MOUSELEAVE: {
+            if (hoverState[hwnd]) {
+                hoverState[hwnd] = false;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        }
         case WM_LBUTTONDOWN:
             InvalidateRect(hwnd, NULL, TRUE);
             SetCapture(hwnd);
@@ -1004,17 +1116,50 @@ LRESULT HandleOwnerDrawCheckbox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             GetWindowText(hwnd, buffer, 256);
             std::wstring text = buffer;
             if (!text.empty() && text[0] == L' ') text = text.substr(1);
-            DrawOwnerDrawCheckbox(hdc, hwnd, g_hideOverlay, text);
+            DrawOwnerDrawCheckbox(hdc, hwnd, g_hideOverlay, text, hoverState[hwnd]);
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_LBUTTONDBLCLK:
+            SetCapture(hwnd);
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
         case WM_ERASEBKGND:
             return 1;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, int listType) {
+    ListBoxState& state = g_listBoxStates[hwnd];
     switch (msg) {
+        case WM_NCDESTROY:
+            g_listBoxStates.erase(hwnd);
+            break;
+        case WM_MOUSEMOVE: {
+            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0 };
+            TrackMouseEvent(&tme);
+            int yPos = GET_Y_LPARAM(lParam);
+            int visibleItems = (listType == ID_IMAGE_LIST) ? VISIBLE_ITEMS_IMAGES : VISIBLE_ITEMS_MONITORS;
+            int startIdx = (listType == ID_IMAGE_LIST) ? g_imageListScrollPos : g_monitorListScrollPos;
+            int itemIndex = startIdx + (yPos - 2) / ITEM_HEIGHT;
+            int itemCount = (listType == ID_IMAGE_LIST) ? (int)g_imageFiles.size() : (int)g_monitors.size();
+            int newHover = -1;
+            if (itemIndex >= 0 && itemIndex < itemCount && itemIndex >= startIdx && itemIndex < startIdx + visibleItems) {
+                newHover = itemIndex;
+            }
+            if (state.hoverIndex != newHover) {
+                state.hoverIndex = newHover;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        }
+        case WM_MOUSELEAVE: {
+            if (state.hoverIndex != -1) {
+                state.hoverIndex = -1;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        }
         case WM_SETCURSOR:
             SetCursor(LoadCursor(NULL, IDC_ARROW));
             return TRUE;
@@ -1099,7 +1244,7 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
-            DrawOwnerDrawListBox(hdc, hwnd, listType);
+            DrawOwnerDrawListBox(hdc, hwnd, listType, state.hoverIndex);
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -1222,6 +1367,22 @@ void UpdateEditFieldText(EditField* field, const std::wstring& newText) {
 }
 LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, EditField* field) {
     switch (msg) {
+        case WM_MOUSEMOVE: {
+            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0 };
+            TrackMouseEvent(&tme);
+            if (!field->hover) {
+                field->hover = true;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        }
+        case WM_MOUSELEAVE: {
+            if (field->hover) {
+                field->hover = false;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        }
         case WM_SETFOCUS:
             field->hasFocus = true;
             InvalidateRect(hwnd, NULL, TRUE);
@@ -1348,7 +1509,7 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
-            DrawOwnerDrawEdit(hdc, hwnd, field, g_darkTheme);
+            DrawOwnerDrawEdit(hdc, hwnd, field, g_darkTheme, field->hover);
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -1360,14 +1521,6 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
-WNDPROC g_oldImageListProc = NULL;
-WNDPROC g_oldMonitorListProc = NULL;
-WNDPROC g_oldOffsetXProc = NULL;
-WNDPROC g_oldOffsetYProc = NULL;
-WNDPROC g_oldSizeProc = NULL;
-WNDPROC g_oldHotkeyToggleProc = NULL;
-WNDPROC g_oldHotkeySettingsProc = NULL;
-WNDPROC g_oldHotkeyQuitProc = NULL;
 LRESULT CALLBACK ImageListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return HandleOwnerDrawListBox(hwnd, msg, wParam, lParam, ID_IMAGE_LIST);
 }
@@ -1391,6 +1544,33 @@ LRESULT CALLBACK HotkeySettingsSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, 
 }
 LRESULT CALLBACK HotkeyQuitSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return HandleOwnerDrawEdit(hwnd, msg, wParam, lParam, &g_hotkeyQuitField);
+}
+LRESULT CALLBACK TabButton1SubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_TAB_BUTTON1);
+}
+LRESULT CALLBACK TabButton2SubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_TAB_BUTTON2);
+}
+LRESULT CALLBACK TabButton3SubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_TAB_BUTTON3);
+}
+LRESULT CALLBACK BrowseButtonSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_BROWSE_BUTTON);
+}
+LRESULT CALLBACK ThemeButtonSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_THEME_BUTTON);
+}
+LRESULT CALLBACK ResetToggleSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_RESET_TOGGLE);
+}
+LRESULT CALLBACK ResetSettingsSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_RESET_SETTINGS);
+}
+LRESULT CALLBACK ResetQuitSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_RESET_QUIT);
+}
+LRESULT CALLBACK HideOverlayCheckboxSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawCheckbox(hwnd, msg, wParam, lParam);
 }
 void AddImageToList(const std::wstring& filePath, bool saveToIni) {
     if (!IsSupportedImageFormat(filePath)) {
@@ -2154,28 +2334,42 @@ void ApplyTheme() {
         g_hBackgroundBrush.reset(CreateSolidBrush(RGB(25,25,25)));
         g_hButtonBrush.reset(CreateSolidBrush(RGB(45,45,45)));
         g_hButtonPressedBrush.reset(CreateSolidBrush(RGB(35,35,35)));
+        g_hButtonHoverBrush.reset(CreateSolidBrush(RGB(60,60,60)));
+        g_hCheckboxBrush.reset(CreateSolidBrush(RGB(60,60,60)));
+        g_hCheckboxHoverBrush.reset(CreateSolidBrush(RGB(80,80,80)));
         g_hActiveTabBrush.reset(CreateSolidBrush(RGB(70,70,70)));
         g_hMenuBackgroundBrush.reset(CreateSolidBrush(g_menuBackgroundColor));
+        g_hMenuSelectedBrush.reset(CreateSolidBrush(g_menuSelectedColor));
         g_hListBoxBackgroundBrush.reset(CreateSolidBrush(RGB(35,35,35)));
-        g_hListBoxSelectedBrush.reset(CreateSolidBrush(RGB(70,70,70)));
-        if (g_hThemeButton) SetWindowText(g_hThemeButton, L"Light");
+        g_hListBoxSelectedBrush.reset(CreateSolidBrush(RGB(80,80,80)));
+        g_hListBoxHoverBrush.reset(CreateSolidBrush(RGB(60,60,60)));
+        g_hEditHoverBrush.reset(CreateSolidBrush(RGB(50,50,50)));
+        if (g_hThemeButton) 
+            SetWindowText(g_hThemeButton, L"Light");
     } 
     else {
-        g_textColor = RGB(0,0,0);
-        g_buttonTextColor = RGB(0,0,0);
-        g_borderColor = RGB(170,170,170);
-        g_buttonBorderColor = RGB(150,150,150);
-        g_menuBackgroundColor = RGB(255,255,255);
-        g_menuTextColor = RGB(0,0,0);
-        g_menuSelectedColor = RGB(220,220,220);
+        g_textColor = RGB(40,40,40);
+        g_buttonTextColor = RGB(40,40,40);
+        g_borderColor = RGB(180,180,180);
+        g_buttonBorderColor = RGB(200,200,200);
+        g_menuBackgroundColor = RGB(240,240,240);
+        g_menuTextColor = RGB(40,40,40);
+        g_menuSelectedColor = RGB(210,210,210);
         g_hBackgroundBrush.reset(CreateSolidBrush(RGB(255,255,255)));
-        g_hButtonBrush.reset(CreateSolidBrush(RGB(240,240,240)));
-        g_hButtonPressedBrush.reset(CreateSolidBrush(RGB(200,200,200)));
-        g_hActiveTabBrush.reset(CreateSolidBrush(RGB(220,220,220)));
+        g_hButtonBrush.reset(CreateSolidBrush(RGB(235,235,235)));
+        g_hButtonPressedBrush.reset(CreateSolidBrush(RGB(245,245,245)));
+        g_hButtonHoverBrush.reset(CreateSolidBrush(RGB(220,220,220)));
+        g_hCheckboxBrush.reset(CreateSolidBrush(RGB(220,220,220)));
+        g_hCheckboxHoverBrush.reset(CreateSolidBrush(RGB(200,200,200)));
+        g_hActiveTabBrush.reset(CreateSolidBrush(RGB(210,210,210)));
         g_hMenuBackgroundBrush.reset(CreateSolidBrush(g_menuBackgroundColor));
-        g_hListBoxBackgroundBrush.reset(CreateSolidBrush(RGB(250,250,250)));
-        g_hListBoxSelectedBrush.reset(CreateSolidBrush(RGB(220,220,220)));
-        if (g_hThemeButton) SetWindowText(g_hThemeButton, L"Dark");
+        g_hMenuSelectedBrush.reset(CreateSolidBrush(g_menuSelectedColor));
+        g_hListBoxBackgroundBrush.reset(CreateSolidBrush(RGB(245,245,245)));
+        g_hListBoxSelectedBrush.reset(CreateSolidBrush(RGB(200,200,200)));
+        g_hListBoxHoverBrush.reset(CreateSolidBrush(RGB(220,220,220)));
+        g_hEditHoverBrush.reset(CreateSolidBrush(RGB(230,230,230)));
+        if (g_hThemeButton) 
+            SetWindowText(g_hThemeButton, L"Dark");
     }
     if (!g_hMenuFont) 
         g_hMenuFont = CreateFont(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
@@ -2330,7 +2524,7 @@ void ShowOwnerDrawMessageBox(HWND hwndParent, const std::wstring& message) {
         GetWindowRect(hwndParent, &pr);
     else 
         GetWindowRect(GetDesktopWindow(), &pr);
-    int w = 250, h = 125;
+    int w = 260, h = 130;
     int x = pr.left + (pr.right - pr.left - w)/2;
     int y = pr.top + (pr.bottom - pr.top - h)/2;
     HWND hMsgBox = CreateWindowEx(WS_EX_DLGMODALFRAME, L"OwnerDrawMessageBox", L"Custom Desktop Overlay", WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, w, h, hwndParent, NULL, GetModuleHandle(NULL), NULL);
@@ -2355,7 +2549,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_hTabButton3 = CreateWindowW(L"BUTTON", L"Hotkeys", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 198, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON3, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hImageList = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 7, 45, 280, VISIBLE_ITEMS_IMAGES*ITEM_HEIGHT+2, hwnd, (HMENU)ID_IMAGE_LIST, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hBrowseButton = CreateWindowW(L"BUTTON", L"Browse Image", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 7, 195, 280, 30, hwnd, (HMENU)ID_BROWSE_BUTTON, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hHideOverlayCheckbox = CreateWindowW(L"BUTTON", L" Hide Overlay", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 7, 250, 120, 20, hwnd, (HMENU)ID_HIDE_OVERLAY_CHECKBOX, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hHideOverlayCheckbox = CreateWindowW(L"BUTTON", L" Hide Overlay", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 7, 250, 90, 20, hwnd, (HMENU)ID_HIDE_OVERLAY_CHECKBOX, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hThemeButton = CreateWindowW(L"BUTTON", L"Dark", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 237, 248, 50, 20, hwnd, (HMENU)ID_THEME_BUTTON, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hMonitorList = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | SS_OWNERDRAW, 7, 45, 280, VISIBLE_ITEMS_MONITORS*ITEM_HEIGHT+2, hwnd, (HMENU)ID_MONITOR_LIST, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hOffsetXDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 25, 115, 50, 20, hwnd, (HMENU)ID_OFFSET_X_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
@@ -2382,6 +2576,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_oldHotkeyToggleProc = (WNDPROC)SetWindowLongPtr(g_hHotkeyToggleDisplay, GWLP_WNDPROC, (LONG_PTR)HotkeyToggleSubclassProc);
             g_oldHotkeySettingsProc = (WNDPROC)SetWindowLongPtr(g_hHotkeySettingsDisplay, GWLP_WNDPROC, (LONG_PTR)HotkeySettingsSubclassProc);
             g_oldHotkeyQuitProc = (WNDPROC)SetWindowLongPtr(g_hHotkeyQuitDisplay, GWLP_WNDPROC, (LONG_PTR)HotkeyQuitSubclassProc);
+            g_oldTabButton1Proc = (WNDPROC)SetWindowLongPtr(g_hTabButton1, GWLP_WNDPROC, (LONG_PTR)TabButton1SubclassProc);
+            g_oldTabButton2Proc = (WNDPROC)SetWindowLongPtr(g_hTabButton2, GWLP_WNDPROC, (LONG_PTR)TabButton2SubclassProc);
+            g_oldTabButton3Proc = (WNDPROC)SetWindowLongPtr(g_hTabButton3, GWLP_WNDPROC, (LONG_PTR)TabButton3SubclassProc);
+            g_oldBrowseButtonProc = (WNDPROC)SetWindowLongPtr(g_hBrowseButton, GWLP_WNDPROC, (LONG_PTR)BrowseButtonSubclassProc);
+            g_oldThemeButtonProc = (WNDPROC)SetWindowLongPtr(g_hThemeButton, GWLP_WNDPROC, (LONG_PTR)ThemeButtonSubclassProc);
+            g_oldResetToggleProc = (WNDPROC)SetWindowLongPtr(g_hResetToggle, GWLP_WNDPROC, (LONG_PTR)ResetToggleSubclassProc);
+            g_oldResetSettingsProc = (WNDPROC)SetWindowLongPtr(g_hResetSettings, GWLP_WNDPROC, (LONG_PTR)ResetSettingsSubclassProc);
+            g_oldResetQuitProc = (WNDPROC)SetWindowLongPtr(g_hResetQuit, GWLP_WNDPROC, (LONG_PTR)ResetQuitSubclassProc);
+            g_oldHideOverlayCheckboxProc = (WNDPROC)SetWindowLongPtr(g_hHideOverlayCheckbox, GWLP_WNDPROC, (LONG_PTR)HideOverlayCheckboxSubclassProc);
             if (g_hTabFont) {
                 SendMessage(g_hImageList, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
                 SendMessage(g_hBrowseButton, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
@@ -2610,14 +2813,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 wchar_t buffer[256]; GetWindowText(pDraw->hwndItem, buffer, 256);
                 std::wstring text = buffer;
                 if (!text.empty() && text[0] == L' ') text = text.substr(1);
-                DrawOwnerDrawCheckbox(pDraw->hDC, pDraw->hwndItem, g_hideOverlay, text);
+                DrawOwnerDrawCheckbox(pDraw->hDC, pDraw->hwndItem, g_hideOverlay, text, false);
                 return TRUE;
             }
             else if (pDraw->CtlID == ID_TAB_BUTTON1 || pDraw->CtlID == ID_TAB_BUTTON2 || pDraw->CtlID == ID_TAB_BUTTON3 || pDraw->CtlID == ID_BROWSE_BUTTON || pDraw->CtlID == ID_THEME_BUTTON || pDraw->CtlID == ID_RESET_TOGGLE || pDraw->CtlID == ID_RESET_SETTINGS || pDraw->CtlID == ID_RESET_QUIT) {
                 wchar_t buffer[256]; GetWindowText(pDraw->hwndItem, buffer, 256);
                 bool isPressed = (pDraw->itemState & ODS_SELECTED) != 0;
                 bool isActiveTab = (pDraw->CtlID == ID_TAB_BUTTON1 && g_activeTab == 1) || (pDraw->CtlID == ID_TAB_BUTTON2 && g_activeTab == 2) || (pDraw->CtlID == ID_TAB_BUTTON3 && g_activeTab == 3);
-                DrawOwnerDrawButton(pDraw->hDC, pDraw->hwndItem, isPressed, buffer, isActiveTab);
+                DrawOwnerDrawButton(pDraw->hDC, pDraw->hwndItem, isPressed, buffer, isActiveTab, false);
                 return TRUE;
             }
             else if (pDraw->CtlID == ID_SIZE_SLIDER) {
@@ -2626,7 +2829,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 return TRUE;
             }
             else if (pDraw->CtlID == ID_IMAGE_LIST || pDraw->CtlID == ID_MONITOR_LIST) {
-                DrawOwnerDrawListBox(pDraw->hDC, pDraw->hwndItem, pDraw->CtlID);
+                DrawOwnerDrawListBox(pDraw->hDC, pDraw->hwndItem, pDraw->CtlID, -1);
                 return TRUE;
             }
             else if (pDraw->CtlType == ODT_MENU) {
@@ -2727,6 +2930,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 SetWindowLongPtr(g_hHotkeySettingsDisplay, GWLP_WNDPROC, (LONG_PTR)g_oldHotkeySettingsProc);
             if (g_oldHotkeyQuitProc) 
                 SetWindowLongPtr(g_hHotkeyQuitDisplay, GWLP_WNDPROC, (LONG_PTR)g_oldHotkeyQuitProc);
+            if (g_oldTabButton1Proc) SetWindowLongPtr(g_hTabButton1, GWLP_WNDPROC, (LONG_PTR)g_oldTabButton1Proc);
+            if (g_oldTabButton2Proc) SetWindowLongPtr(g_hTabButton2, GWLP_WNDPROC, (LONG_PTR)g_oldTabButton2Proc);
+            if (g_oldTabButton3Proc) SetWindowLongPtr(g_hTabButton3, GWLP_WNDPROC, (LONG_PTR)g_oldTabButton3Proc);
+            if (g_oldBrowseButtonProc) SetWindowLongPtr(g_hBrowseButton, GWLP_WNDPROC, (LONG_PTR)g_oldBrowseButtonProc);
+            if (g_oldThemeButtonProc) SetWindowLongPtr(g_hThemeButton, GWLP_WNDPROC, (LONG_PTR)g_oldThemeButtonProc);
+            if (g_oldResetToggleProc) SetWindowLongPtr(g_hResetToggle, GWLP_WNDPROC, (LONG_PTR)g_oldResetToggleProc);
+            if (g_oldResetSettingsProc) SetWindowLongPtr(g_hResetSettings, GWLP_WNDPROC, (LONG_PTR)g_oldResetSettingsProc);
+            if (g_oldResetQuitProc) SetWindowLongPtr(g_hResetQuit, GWLP_WNDPROC, (LONG_PTR)g_oldResetQuitProc);
+            if (g_oldHideOverlayCheckboxProc) SetWindowLongPtr(g_hHideOverlayCheckbox, GWLP_WNDPROC, (LONG_PTR)g_oldHideOverlayCheckboxProc);
             StopRenderThread();
             UnregisterHotkeys();
             if (g_settingsChanged) SaveAllSettingsToIni();
