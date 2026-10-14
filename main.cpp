@@ -69,6 +69,8 @@ struct EditField {
     std::wstring text;
     bool hasFocus;
     int cursorPos;
+    int selStart;
+    bool selecting;
     UINT id;
     HWND hwnd;
     bool hover;
@@ -88,7 +90,6 @@ struct IconDeleter {
 using UniqueHBrush = std::unique_ptr<std::remove_pointer<HBRUSH>::type, GdiObjectDeleter>;
 using UniqueHIcon = std::unique_ptr<std::remove_pointer<HICON>::type, IconDeleter>;
 using UniqueBitmap = std::unique_ptr<Bitmap>;
-
 struct ButtonState {
     bool hover;
     bool pressed;
@@ -96,10 +97,8 @@ struct ButtonState {
 struct ListBoxState {
     int hoverIndex;
 };
-
 std::unordered_map<HWND, ButtonState> g_buttonStates;
 std::unordered_map<HWND, ListBoxState> g_listBoxStates;
-
 class AnimatedGIF {
 private:
     IWICImagingFactory* m_pFactory;
@@ -139,7 +138,7 @@ private:
         Gdiplus::BitmapData bmpData;
         Gdiplus::Rect rect(0, 0, width, height);
         if (bitmap->LockBits(&rect, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bmpData) == Gdiplus::Ok) {
-            WICRect rc = { 0, 0, (INT)width, (INT)height };
+            WICRect rc = {0, 0, (INT)width, (INT)height};
             HRESULT hr = pConverter->CopyPixels(&rc, bmpData.Stride, bmpData.Stride * height, (BYTE*)bmpData.Scan0);
             bitmap->UnlockBits(&bmpData);
             if (SUCCEEDED(hr)) 
@@ -281,7 +280,8 @@ public:
             return;
         m_hwndOverlay = hwndOverlay;
         if (m_frames.size() > 1 && m_hwndOverlay) {
-            if (m_timerId) KillTimer(m_hwndOverlay, m_timerId);
+            if (m_timerId)
+                KillTimer(m_hwndOverlay, m_timerId);
             m_timerId = SetTimer(m_hwndOverlay, ID_ANIMATION_TIMER, m_frames[m_currentFrame.load()].delay, NULL);
         }
     }
@@ -320,18 +320,27 @@ public:
         }
         return m_scaledFrames[index];
     }
-    bool IsInitialized() const { return m_isInitialized; }
-    bool IsAnimated() const { return m_frames.size() > 1; }
-    int GetWidth() const { return (int)m_width; }
-    int GetHeight() const { return (int)m_height; }
-    UINT GetCurrentFrameIndex() const { return m_currentFrame.load(); }
+    bool IsInitialized() const {
+        return m_isInitialized;
+    }
+    bool IsAnimated() const {
+        return m_frames.size() > 1;
+    }
+    int GetWidth() const {
+        return (int)m_width;
+    }
+    int GetHeight() const {
+        return (int)m_height;
+    }
+    UINT GetCurrentFrameIndex() const {
+        return m_currentFrame.load();
+    }
     void ClearCache() {
         std::lock_guard<std::mutex> lock(m_cacheMutex);
         m_scaledFrames.clear();
         m_scaledCacheScale = 0;
     }
 };
-
 void DrawOwnerDrawButton(HDC hdc, HWND hwnd, bool isPressed, const std::wstring& text, bool isActiveTab, bool isHovered);
 void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstring& text, bool isHovered);
 void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type, int hoverIndex);
@@ -456,12 +465,12 @@ int g_monitorListScrollPos = 0;
 const int ITEM_HEIGHT = 16;
 const int VISIBLE_ITEMS_IMAGES = 9;
 const int VISIBLE_ITEMS_MONITORS = 3;
-EditField g_offsetXField = { L"0", false, 0, ID_OFFSET_X_DISPLAY, NULL, false };
-EditField g_offsetYField = { L"0", false, 0, ID_OFFSET_Y_DISPLAY, NULL, false };
-EditField g_sizeField = { L"1.00", false, 0, ID_SIZE_DISPLAY, NULL, false };
-EditField g_hotkeyToggleField = { L"H", false, 0, ID_HOTKEY_TOGGLE_DISPLAY, NULL, false };
-EditField g_hotkeySettingsField = { L"S", false, 0, ID_HOTKEY_SETTINGS_DISPLAY, NULL, false };
-EditField g_hotkeyQuitField = { L"Q", false, 0, ID_HOTKEY_QUIT_DISPLAY, NULL, false };
+EditField g_offsetXField = {L"0", false, 0, 0, false, ID_OFFSET_X_DISPLAY, NULL, false};
+EditField g_offsetYField = {L"0", false, 0, 0, false, ID_OFFSET_Y_DISPLAY, NULL, false};
+EditField g_sizeField = {L"1.00", false, 0, 0, false, ID_SIZE_DISPLAY, NULL, false};
+EditField g_hotkeyToggleField = {L"H", false, 0, 0, false, ID_HOTKEY_TOGGLE_DISPLAY, NULL, false};
+EditField g_hotkeySettingsField = {L"S", false, 0, 0, false, ID_HOTKEY_SETTINGS_DISPLAY, NULL, false};
+EditField g_hotkeyQuitField = {L"Q", false, 0, 0, false, ID_HOTKEY_QUIT_DISPLAY, NULL, false};
 static int g_prevMonitorCount = 0;
 static std::vector<RECT> g_prevMonitorRects;
 std::shared_ptr<Bitmap> g_cachedBitmapShared;
@@ -474,14 +483,13 @@ HANDLE g_renderEvent = NULL;
 std::thread g_renderThread;
 std::atomic<bool> g_renderThreadRunning(false);
 std::atomic<bool> g_renderThreadShouldExit(false);
-std::atomic<bool> g_monitorNamesLoaded{ false };
-std::atomic<bool> g_programExiting{ false };
-std::atomic<bool> g_monitorNamesThreadRunning{ false };
+std::atomic<bool> g_monitorNamesLoaded{false};
+std::atomic<bool> g_programExiting{false};
+std::atomic<bool> g_monitorNamesThreadRunning{false};
 std::thread g_monitorNamesThread;
 bool g_settingsChanged = false;
 std::atomic<int> g_overlayX = 0;
 std::atomic<int> g_overlayY = 0;
-
 WNDPROC g_oldImageListProc = NULL;
 WNDPROC g_oldMonitorListProc = NULL;
 WNDPROC g_oldOffsetXProc = NULL;
@@ -499,10 +507,9 @@ WNDPROC g_oldResetToggleProc = NULL;
 WNDPROC g_oldResetSettingsProc = NULL;
 WNDPROC g_oldResetQuitProc = NULL;
 WNDPROC g_oldHideOverlayCheckboxProc = NULL;
-
 LRESULT CALLBACK OverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 std::wstring GetIniFilePath() {
-    wchar_t exePath[MAX_PATH] = { 0 };
+    wchar_t exePath[MAX_PATH] = {0};
     GetModuleFileNameW(NULL, exePath, MAX_PATH);
     std::wstring exeDir = exePath;
     size_t lastSlash = exeDir.find_last_of(L"\\/");
@@ -525,7 +532,7 @@ std::map<std::wstring, std::wstring> GetDeviceIdMap() {
 }
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
     static std::map<std::wstring, std::wstring> deviceMap = GetDeviceIdMap();
-    MONITORINFOEX monitorInfo = { 0 };
+    MONITORINFOEX monitorInfo = {0};
     monitorInfo.cbSize = sizeof(monitorInfo);
     if (!GetMonitorInfo(hMonitor, &monitorInfo)) 
         return TRUE;
@@ -538,7 +545,7 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
     auto it = deviceMap.find(key);
     if (it != deviceMap.end()) 
         info.deviceID = it->second;
-    DEVMODE devMode = { 0 };
+    DEVMODE devMode = {0};
     devMode.dmSize = sizeof(DEVMODE);
     if (EnumDisplaySettings(monitorInfo.szDevice, ENUM_CURRENT_SETTINGS, &devMode)) {
         info.name = std::to_wstring(devMode.dmPelsWidth) + L"x" + std::to_wstring(devMode.dmPelsHeight) + L" @" + std::to_wstring(devMode.dmDisplayFrequency) + L"Hz";
@@ -554,10 +561,10 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 std::vector<std::pair<std::wstring, std::wstring>> GetMonitorFriendlyNamesPowerShellWithInstance() {
     std::vector<std::pair<std::wstring, std::wstring>> result;
     HANDLE hReadPipe, hWritePipe;
-    SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+    SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
     if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) 
         return result;
-    STARTUPINFOW si = { sizeof(STARTUPINFOW) };
+    STARTUPINFOW si = {sizeof(STARTUPINFOW)};
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdOutput = hWritePipe;
     si.hStdError = hWritePipe;
@@ -727,7 +734,7 @@ void ActivateNextMessageBox(HWND hCurrent) {
 }
 void UpdateOffsetBoundsDisplay() {
     if (g_hwnd && IsWindowVisible(g_hMonitorList)) {
-        RECT boundsRect = { 8, 118, 280, 180 };
+        RECT boundsRect = {8, 118, 280, 180};
         InvalidateRect(g_hwnd, &boundsRect, TRUE);
         UpdateWindow(g_hwnd);
     }
@@ -741,7 +748,7 @@ void CheckMonitorConfiguration() {
     std::vector<MonitorInfo> newMonitors;
     EnumDisplayMonitors(NULL, NULL, [](HMONITOR hMon, HDC, LPRECT rc, LPARAM lp) -> BOOL {
         auto* vec = reinterpret_cast<std::vector<MonitorInfo>*>(lp);
-        MONITORINFOEX mi = { sizeof(mi) };
+        MONITORINFOEX mi = {sizeof(mi)};
         if (GetMonitorInfo(hMon, &mi)) {
             MonitorInfo info;
             info.handle = hMon;
@@ -833,7 +840,7 @@ void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstrin
     int textMargin = 5;
     int checkboxX = rc.left + 2;
     int checkboxY = rc.top + (rc.bottom - rc.top - checkboxSize) / 2;
-    RECT checkboxRect = { checkboxX, checkboxY, checkboxX + checkboxSize, checkboxY + checkboxSize };
+    RECT checkboxRect = {checkboxX, checkboxY, checkboxX + checkboxSize, checkboxY + checkboxSize};
     HBRUSH hCheckBrush = isHovered ? g_hCheckboxHoverBrush.get() : g_hCheckboxBrush.get();
     FillRect(hdc, &checkboxRect, hCheckBrush);
     HPEN hBorderPen = CreatePen(PS_SOLID, 1, g_darkTheme ? RGB(100,100,100) : RGB(150,150,150));
@@ -919,11 +926,54 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type, int hoverIndex) {
     }
     SelectObject(hdc, hOldFont);
 }
+int GetCharIndexFromEdit(HWND hwnd, const std::wstring& text, POINT pt) {
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    rc.left += 2;
+    rc.right -= 2;
+    if (pt.x < rc.left) 
+        return 0;
+    if (pt.x > rc.right) 
+        return (int)text.length();
+    HDC hdc = GetDC(hwnd);
+    HFONT hOldFont = (HFONT)SelectObject(hdc, g_hTabFont);
+    int xRel = pt.x - rc.left;
+    int index = (int)text.length();
+    std::vector<int> cum(text.length()+1, 0);
+    for (size_t i = 1; i <= text.length(); ++i) {
+        std::wstring prefix = text.substr(0, i);
+        SIZE sz;
+        GetTextExtentPoint32(hdc, prefix.c_str(), (int)prefix.length(), &sz);
+        cum[i] = sz.cx;
+        if (xRel <= cum[i]) {
+            index = (int)i;
+            break;
+        }
+    }
+    SelectObject(hdc, hOldFont);
+    ReleaseDC(hwnd, hdc);
+    return index;
+}
 void DrawOwnerDrawEdit(HDC hdc, HWND hwnd, EditField* field, bool darkTheme, bool isHovered) {
     RECT rc;
     GetClientRect(hwnd, &rc);
     HBRUSH bgBrush = (isHovered && !field->hasFocus) ? g_hEditHoverBrush.get() : g_hListBoxBackgroundBrush.get();
     FillRect(hdc, &rc, bgBrush);
+    if (field->hasFocus && field->selStart != field->cursorPos) {
+        int selMin = std::min(field->selStart, field->cursorPos);
+        int selMax = std::max(field->selStart, field->cursorPos);
+        std::wstring prefixMin = field->text.substr(0, selMin);
+        std::wstring prefixMax = field->text.substr(0, selMax);
+        HFONT hOldFont = (HFONT)SelectObject(hdc, g_hTabFont);
+        SIZE sizeMin, sizeMax;
+        GetTextExtentPoint32(hdc, prefixMin.c_str(), (int)prefixMin.length(), &sizeMin);
+        GetTextExtentPoint32(hdc, prefixMax.c_str(), (int)prefixMax.length(), &sizeMax);
+        int leftX = rc.left + 2 + sizeMin.cx;
+        int rightX = rc.left + 2 + sizeMax.cx;
+        RECT selRect = {leftX, rc.top+1, rightX, rc.bottom-1};
+        FillRect(hdc, &selRect, g_hListBoxSelectedBrush.get());
+        SelectObject(hdc, hOldFont);
+    }
     COLORREF borderColor = darkTheme ? RGB(80,80,80) : RGB(150,150,150);
     if (field->hasFocus) borderColor = darkTheme ? RGB(255,255,255) : RGB(0,0,0);
     HPEN hBorderPen = CreatePen(PS_SOLID, 1, borderColor);
@@ -962,7 +1012,7 @@ void DrawMenuItem(HDC hdc, RECT rc, const std::wstring& text, bool isSelected, b
         int checkSize = 13;
         int checkX = rc.left + 5;
         int checkY = rc.top + (rc.bottom - rc.top - checkSize)/2;
-        RECT checkRect = { checkX, checkY, checkX+checkSize, checkY+checkSize };
+        RECT checkRect = {checkX, checkY, checkX+checkSize, checkY+checkSize};
         HPEN hCheckBorder = CreatePen(PS_SOLID, 1, g_darkTheme ? RGB(100,100,100) : RGB(180,180,180));
         HPEN hOldPen = (HPEN)SelectObject(hdc, hCheckBorder);
         HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
@@ -993,7 +1043,7 @@ void DrawMenuItem(HDC hdc, RECT rc, const std::wstring& text, bool isSelected, b
     SelectObject(hdc, hOldFont);
 }
 void CreateOwnerDrawMenu(HMENU hMenu, int position, UINT id, const wchar_t* text) {
-    MENUITEMINFO mii = { sizeof(mii) };
+    MENUITEMINFO mii = {sizeof(mii)};
     mii.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE | MIIM_DATA;
     mii.fType = MFT_OWNERDRAW;
     mii.wID = id;
@@ -1021,7 +1071,7 @@ LRESULT HandleOwnerDrawButton(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
             g_buttonStates.erase(hwnd);
             break;
         case WM_MOUSEMOVE: {
-            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0 };
+            TRACKMOUSEEVENT tme = {sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0};
             TrackMouseEvent(&tme);
             ButtonState& state = g_buttonStates[hwnd];
             if (!state.hover) {
@@ -1039,6 +1089,7 @@ LRESULT HandleOwnerDrawButton(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
             break;
         }
         case WM_LBUTTONDOWN: {
+            SetFocus(GetParent(hwnd));
             ButtonState& state = g_buttonStates[hwnd];
             state.pressed = true;
             SetCapture(hwnd);
@@ -1051,7 +1102,7 @@ LRESULT HandleOwnerDrawButton(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
                 state.pressed = false;
                 ReleaseCapture();
                 InvalidateRect(hwnd, NULL, TRUE);
-                POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
                 ClientToScreen(hwnd, &pt);
                 SendMessage(g_hwnd, WM_COMMAND, MAKEWPARAM(buttonId, BN_CLICKED), (LPARAM)hwnd);
             }
@@ -1085,7 +1136,7 @@ LRESULT HandleOwnerDrawCheckbox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             hoverState.erase(hwnd);
             break;
         case WM_MOUSEMOVE: {
-            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0 };
+            TRACKMOUSEEVENT tme = {sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0};
             TrackMouseEvent(&tme);
             if (!hoverState[hwnd]) {
                 hoverState[hwnd] = true;
@@ -1101,6 +1152,7 @@ LRESULT HandleOwnerDrawCheckbox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             break;
         }
         case WM_LBUTTONDOWN:
+            SetFocus(GetParent(hwnd));
             InvalidateRect(hwnd, NULL, TRUE);
             SetCapture(hwnd);
             break;
@@ -1136,7 +1188,7 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             g_listBoxStates.erase(hwnd);
             break;
         case WM_MOUSEMOVE: {
-            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0 };
+            TRACKMOUSEEVENT tme = {sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0};
             TrackMouseEvent(&tme);
             int yPos = GET_Y_LPARAM(lParam);
             int visibleItems = (listType == ID_IMAGE_LIST) ? VISIBLE_ITEMS_IMAGES : VISIBLE_ITEMS_MONITORS;
@@ -1218,7 +1270,7 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     g_imageListSelected = itemIndex;
                     InvalidateRect(hwnd, NULL, TRUE);
                     UpdateWindow(hwnd);
-                    POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                    POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
                     ClientToScreen(hwnd, &pt);
                     HMENU hMenu = CreatePopupMenu();
                     CreateOwnerDrawMenu(hMenu, 0, ID_CONTEXT_OPEN, L"Open File Location");
@@ -1259,7 +1311,9 @@ void ApplyOffsetFromField(EditField* field, bool isX) {
         if (!field->text.empty())
             value = std::stoi(field->text);
     }
-    catch (...) { value = 0; }
+    catch (...) {
+        value = 0;
+    }
     if (value > 9999) 
         value = 9999;
     if (value < -9999) 
@@ -1275,7 +1329,9 @@ void ApplyScaleFromField(EditField* field) {
     try {
         if (!field->text.empty()) value = std::stof(field->text);
     } 
-    catch (...) { value = 1.0f; }
+    catch (...) {
+        value = 1.0f;
+    }
     if (value < 0.0f) 
         value = 0.0f;
     if (value > 2.0f) 
@@ -1300,6 +1356,7 @@ bool ResetHotkeyField(int fieldId, wchar_t defaultKey, wchar_t& currentKey, wcha
         field.text = std::wstring(1, defaultKey);
     }
     field.cursorPos = (int)field.text.length();
+    field.selStart = field.cursorPos;
     return oldKey != currentKey;
 }
 void ApplyHotkeyFromField(EditField* field, int id) {
@@ -1333,7 +1390,7 @@ void ApplyHotkeyFromField(EditField* field, int id) {
                 }
             } 
             else {
-                if (id == 1) { 
+                if (id == 1) {
                     g_toggleHotkeyKey = key; g_lastValidToggleKey = key; 
                 }
                 else if (id == 2) {
@@ -1360,19 +1417,29 @@ void ApplyHotkeyFromField(EditField* field, int id) {
         }
     }
     field->cursorPos = (int)field->text.length();
+    field->selStart = field->cursorPos;
 }
 void UpdateEditFieldText(EditField* field, const std::wstring& newText) {
     field->text = newText;
     field->cursorPos = (int)field->text.length();
+    field->selStart = field->cursorPos;
 }
 LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, EditField* field) {
     switch (msg) {
         case WM_MOUSEMOVE: {
-            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0 };
+            TRACKMOUSEEVENT tme = {sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0};
             TrackMouseEvent(&tme);
             if (!field->hover) {
                 field->hover = true;
                 InvalidateRect(hwnd, NULL, TRUE);
+            }
+            if (field->selecting && (wParam & MK_LBUTTON)) {
+                POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                int idx = GetCharIndexFromEdit(hwnd, field->text, pt);
+                if (idx != field->cursorPos) {
+                    field->cursorPos = idx;
+                    InvalidateRect(hwnd, NULL, TRUE);
+                }
             }
             break;
         }
@@ -1383,12 +1450,44 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
             }
             break;
         }
+        case WM_LBUTTONDOWN: {
+            SetFocus(hwnd);
+            POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            int idx = GetCharIndexFromEdit(hwnd, field->text, pt);
+            field->cursorPos = idx;
+            field->selStart = idx;
+            field->selecting = true;
+            SetCapture(hwnd);
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
+        }
+        case WM_LBUTTONDBLCLK: {
+            SetFocus(hwnd);
+            field->selStart = 0;
+            field->cursorPos = (int)field->text.length();
+            field->selecting = false;
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
+        }
+        case WM_LBUTTONUP: {
+            if (field->selecting) {
+                field->selecting = false;
+                ReleaseCapture();
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            return 0;
+        }
+        case WM_CAPTURECHANGED: {
+            field->selecting = false;
+            return 0;
+        }
         case WM_SETFOCUS:
             field->hasFocus = true;
             InvalidateRect(hwnd, NULL, TRUE);
             return 0;
         case WM_KILLFOCUS:
             field->hasFocus = false;
+            field->selecting = false;
             InvalidateRect(hwnd, NULL, TRUE);
             switch (field->id) {
                 case ID_OFFSET_X_DISPLAY: 
@@ -1406,7 +1505,7 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
                 case ID_HOTKEY_TOGGLE_DISPLAY: {
                     wchar_t old = g_toggleHotkeyKey;
                     ApplyHotkeyFromField(field, 1);
-                    if (old != g_toggleHotkeyKey) { RegisterHotkeys(); g_settingsChanged = true; }
+                    if (old != g_toggleHotkeyKey) {RegisterHotkeys(); g_settingsChanged = true;}
                     break;
                 }
                 case ID_HOTKEY_SETTINGS_DISPLAY: {
@@ -1431,29 +1530,59 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
         case WM_KEYDOWN:
             switch (wParam) {
                 case VK_LEFT: 
-                    if (field->cursorPos > 0) {
-                        field->cursorPos--; 
-                        InvalidateRect(hwnd, NULL, TRUE); 
-                    } 
+                    if (field->selStart != field->cursorPos) {
+                        field->cursorPos = std::min(field->selStart, field->cursorPos);
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    }
+                    else if (field->cursorPos > 0) {
+                        field->cursorPos--;
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    }
                     return 0;
                 case VK_RIGHT: 
-                    if (field->cursorPos < (int)field->text.length()) {
-                        field->cursorPos++; 
-                        InvalidateRect(hwnd, NULL, TRUE); 
+                    if (field->selStart != field->cursorPos) {
+                        field->cursorPos = std::max(field->selStart, field->cursorPos);
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
                     } 
+                    else if (field->cursorPos < (int)field->text.length()) {
+                        field->cursorPos++;
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    }
                     return 0;
                 case VK_BACK: 
-                    if (field->cursorPos > 0) {
-                        field->text.erase(field->cursorPos-1, 1); 
-                        field->cursorPos--; 
-                        InvalidateRect(hwnd, NULL, TRUE); 
+                    if (field->selStart != field->cursorPos) {
+                        int start = std::min(field->selStart, field->cursorPos);
+                        int end = std::max(field->selStart, field->cursorPos);
+                        field->text.erase(start, end - start);
+                        field->cursorPos = start;
+                        field->selStart = start;
+                        InvalidateRect(hwnd, NULL, TRUE);
                     } 
+                    else if (field->cursorPos > 0) {
+                        field->text.erase(field->cursorPos-1, 1);
+                        field->cursorPos--;
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    }
                     return 0;
                 case VK_DELETE: 
-                    if (field->cursorPos < (int)field->text.length()) {
-                        field->text.erase(field->cursorPos, 1);
-                        InvalidateRect(hwnd, NULL, TRUE); 
+                    if (field->selStart != field->cursorPos) {
+                        int start = std::min(field->selStart, field->cursorPos);
+                        int end = std::max(field->selStart, field->cursorPos);
+                        field->text.erase(start, end - start);
+                        field->cursorPos = start;
+                        field->selStart = start;
+                        InvalidateRect(hwnd, NULL, TRUE);
                     } 
+                    else if (field->cursorPos < (int)field->text.length()) {
+                        field->text.erase(field->cursorPos, 1);
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    }
                     return 0;
                 case VK_ESCAPE: 
                 case VK_RETURN: 
@@ -1469,43 +1598,56 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
                 if (IsValidHotkeyChar(ch)) {
                     field->text = std::wstring(1, std::towupper(ch));
                     field->cursorPos = 1;
+                    field->selStart = 1;
                     InvalidateRect(hwnd, NULL, TRUE);
                 }
                 else if (ch == VK_BACK && !field->text.empty()) {
                     field->text.clear();
                     field->cursorPos = 0;
+                    field->selStart = 0;
                     InvalidateRect(hwnd, NULL, TRUE);
                 }
                 return 0;
             }
-            else if (field->id == ID_SIZE_DISPLAY) {
-                if ((ch >= L'0' && ch <= L'9') || ch == L'.') {
-                    if (ch == L'.' && field->text.find(L'.') != std::wstring::npos) 
-                        return 0;
-                    if (field->text.length() < 4) {
-                        field->text.insert(field->cursorPos, 1, ch);
-                        field->cursorPos++;
-                        InvalidateRect(hwnd, NULL, TRUE);
-                    }
-                }
-                return 0;
-            }
             else {
-                if ((ch >= L'0' && ch <= L'9') || ch == L'-') {
+                bool allowed = false;
+                if (field->id == ID_OFFSET_X_DISPLAY || field->id == ID_OFFSET_Y_DISPLAY) {
+                    allowed = ((ch >= L'0' && ch <= L'9') || ch == L'-');
+                } 
+                else if (field->id == ID_SIZE_DISPLAY) {
+                    allowed = ((ch >= L'0' && ch <= L'9') || ch == L'.');
+                }
+                if (!allowed) return 0;
+                if (field->selStart != field->cursorPos) {
+                    int start = std::min(field->selStart, field->cursorPos);
+                    int end = std::max(field->selStart, field->cursorPos);
+                    field->text.erase(start, end - start);
+                    field->cursorPos = start;
+                    field->selStart = start;
+                }
+                if (field->id == ID_OFFSET_X_DISPLAY || field->id == ID_OFFSET_Y_DISPLAY) {
                     if (ch == L'-' && (field->cursorPos != 0 || field->text.find(L'-') != std::wstring::npos)) 
                         return 0;
                     if (field->text.length() < 5) {
                         field->text.insert(field->cursorPos, 1, ch);
                         field->cursorPos++;
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    }
+                } 
+                else if (field->id == ID_SIZE_DISPLAY) {
+                    if (ch == L'.' && field->text.find(L'.') != std::wstring::npos) 
+                        return 0;
+                    if (field->text.length() < 4) {
+                        field->text.insert(field->cursorPos, 1, ch);
+                        field->cursorPos++;
+                        field->selStart = field->cursorPos;
                         InvalidateRect(hwnd, NULL, TRUE);
                     }
                 }
                 return 0;
             }
         }
-        case WM_LBUTTONDOWN:
-            SetFocus(hwnd);
-            return 0;
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
@@ -1730,11 +1872,11 @@ void SaveAllSettingsToIni() {
     wchar_t scaleStr[32];
     swprintf_s(scaleStr, 32, L"%.2f", g_imageScale.load());
     WritePrivateProfileStringW(L"Location & Size", L"ImageScale", scaleStr, iniPath.c_str());
-    wchar_t toggleKey[2] = { g_toggleHotkeyKey, 0 };
+    wchar_t toggleKey[2] = {g_toggleHotkeyKey, 0};
     WritePrivateProfileStringW(L"Hotkeys", L"ToggleOverlay", g_toggleHotkeyKey ? toggleKey : L"", iniPath.c_str());
-    wchar_t settingsKey[2] = { g_settingsHotkeyKey, 0 };
+    wchar_t settingsKey[2] = {g_settingsHotkeyKey, 0};
     WritePrivateProfileStringW(L"Hotkeys", L"Settings", g_settingsHotkeyKey ? settingsKey : L"", iniPath.c_str());
-    wchar_t quitKey[2] = { g_quitHotkeyKey, 0 };
+    wchar_t quitKey[2] = {g_quitHotkeyKey, 0};
     WritePrivateProfileStringW(L"Hotkeys", L"Quit", g_quitHotkeyKey ? quitKey : L"", iniPath.c_str());
     if (g_windowVisible) {
         RECT wr;
@@ -2072,8 +2214,8 @@ void RestoreLastOverlay() {
         CreateOverlayWindow(g_lastDisplayedImage, false);
 }
 void BrowseForImage() {
-    OPENFILENAMEW ofn = { sizeof(ofn) };
-    wchar_t szFile[MAX_PATH] = { 0 };
+    OPENFILENAMEW ofn = {sizeof(ofn)};
+    wchar_t szFile[MAX_PATH] = {0};
     ofn.hwndOwner = g_hwnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = MAX_PATH;
@@ -2260,7 +2402,7 @@ void DrawCustomSlider(HDC hdc, RECT rc, int value, bool darkTheme, bool enabled)
     int usableTrackWidth = usableTrackEnd - usableTrackStart;
     int tickStart = trackStart + margin, tickEnd = trackEnd - margin;
     HBRUSH hTrackBrush = CreateSolidBrush(darkTheme ? RGB(25,25,25) : RGB(255,255,255));
-    RECT trackRc = { trackStart, rc.top, trackEnd, rc.bottom };
+    RECT trackRc = {trackStart, rc.top, trackEnd, rc.bottom};
     FillRect(hdc, &trackRc, hTrackBrush);
     DeleteObject(hTrackBrush);
     int thumbPos = usableTrackStart + (value * usableTrackWidth / 200);
@@ -2397,13 +2539,16 @@ bool CheckHotkeyConflict(wchar_t newKey, int excludeId, std::wstring& conflictAc
     if (newKey == 0) 
         return false;
     if (excludeId != 1 && newKey == g_toggleHotkeyKey) {
-         conflictAction = L"Toggle Overlay Visibility"; return true; 
+        conflictAction = L"Toggle Overlay Visibility"; 
+        return true; 
     }
     if (excludeId != 2 && newKey == g_quitHotkeyKey) {
-         conflictAction = L"Quit"; return true; 
+        conflictAction = L"Quit"; 
+        return true; 
     }
     if (excludeId != 3 && newKey == g_settingsHotkeyKey) {
-        conflictAction = L"Toggle Settings Window Visibility"; return true; 
+        conflictAction = L"Toggle Settings Window Visibility"; 
+        return true; 
     }
     return false;
 }
@@ -2983,24 +3128,24 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             bool showMonitorControls = IsWindowVisible(g_hMonitorList) && IsWindowEnabled(g_hMonitorList);
             bool showHotkeyControls = IsWindowVisible(g_hHotkeyToggleDisplay) && IsWindowEnabled(g_hHotkeyToggleDisplay);
             if (showImageControls) {
-                RECT tr = { 8, 30, 280, 50 };
+                RECT tr = {8, 30, 280, 50};
                 FillRect(hdc, &tr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Images List", -1, &tr, DT_LEFT | DT_TOP);
-                RECT fr = { 8, 230, 280, 245 };
+                RECT fr = {8, 230, 280, 245};
                 FillRect(hdc, &fr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Supported formats: .png, .jpg, .jpeg, .gif", -1, &fr, DT_LEFT | DT_TOP);
             }
             if (showMonitorControls) {
-                RECT tr = { 8, 30, 280, 50 };
+                RECT tr = {8, 30, 280, 50};
                 FillRect(hdc, &tr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Monitors List", -1, &tr, DT_LEFT | DT_TOP);
-                RECT otr = { 8, 100, 280, 130 };
+                RECT otr = {8, 100, 280, 130};
                 FillRect(hdc, &otr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Location Offset", -1, &otr, DT_LEFT | DT_TOP);
-                RECT xlr = { 8, 118, 20, 155 };
+                RECT xlr = {8, 118, 20, 155};
                 FillRect(hdc, &xlr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"X:", -1, &xlr, DT_LEFT | DT_TOP);
-                RECT ylr = { 8, 143, 20, 180 };
+                RECT ylr = {8, 143, 20, 180};
                 FillRect(hdc, &ylr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Y:", -1, &ylr, DT_LEFT | DT_TOP);
                 int maxX = 0, maxY = 0;
@@ -3014,43 +3159,43 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 }
                 std::wstring xb = L"[" + std::to_wstring(-maxX) + L"; " + std::to_wstring(maxX) + L"]";
                 std::wstring yb = L"[" + std::to_wstring(-maxY) + L"; " + std::to_wstring(maxY) + L"]";
-                RECT xbr = { 85, 118, 220, 155 };
+                RECT xbr = {85, 118, 220, 155};
                 FillRect(hdc, &xbr, g_hBackgroundBrush.get());
                 DrawText(hdc, xb.c_str(), -1, &xbr, DT_LEFT | DT_TOP);
-                RECT ybr = { 85, 143, 220, 180 };
+                RECT ybr = {85, 143, 220, 180};
                 FillRect(hdc, &ybr, g_hBackgroundBrush.get());
                 DrawText(hdc, yb.c_str(), -1, &ybr, DT_LEFT | DT_TOP);
-                RECT str = { 8, 165, 280, 180 };
+                RECT str = {8, 165, 280, 180};
                 FillRect(hdc, &str, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Size", -1, &str, DT_LEFT | DT_TOP);
                 std::wstring szb = L"[0.00; 2.00]";
-                RECT szbr = { 67, 208, 200, 240 };
+                RECT szbr = {67, 208, 200, 240};
                 FillRect(hdc, &szbr, g_hBackgroundBrush.get());
                 DrawText(hdc, szb.c_str(), -1, &szbr, DT_LEFT | DT_TOP);
             }
             if (showHotkeyControls) {
-                RECT ttr = { 8, 30, 280, 50 };
+                RECT ttr = {8, 30, 280, 50};
                 FillRect(hdc, &ttr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Toggle Overlay Visibility:", -1, &ttr, DT_LEFT | DT_TOP);
-                RECT klr = { 8, 48, 280, 68 };
+                RECT klr = {8, 48, 280, 68};
                 FillRect(hdc, &klr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Alt +", -1, &klr, DT_LEFT | DT_TOP);
-                RECT str = { 8, 75, 280, 95 };
+                RECT str = {8, 75, 280, 95};
                 FillRect(hdc, &str, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Toggle Settings Window Visibility:", -1, &str, DT_LEFT | DT_TOP);
-                RECT klr2 = { 8, 93, 280, 113 };
+                RECT klr2 = {8, 93, 280, 113};
                 FillRect(hdc, &klr2, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Alt +", -1, &klr2, DT_LEFT | DT_TOP);
-                RECT qtr = { 8, 120, 280, 140 };
+                RECT qtr = {8, 120, 280, 140};
                 FillRect(hdc, &qtr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Quit:", -1, &qtr, DT_LEFT | DT_TOP);
-                RECT klr3 = { 8, 138, 280, 158 };
+                RECT klr3 = {8, 138, 280, 158};
                 FillRect(hdc, &klr3, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Alt +", -1, &klr3, DT_LEFT | DT_TOP);
-                RECT f1 = { 8, 215, 280, 230 };
+                RECT f1 = {8, 215, 280, 230};
                 FillRect(hdc, &f1, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Allowed input: 0-9 and A-Z", -1, &f1, DT_LEFT | DT_TOP);
-                RECT f2 = { 8, 230, 280, 245 };
+                RECT f2 = {8, 230, 280, 245};
                 FillRect(hdc, &f2, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Null input disables hotkey", -1, &f2, DT_LEFT | DT_TOP);
             }
@@ -3100,7 +3245,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             RECT sr;
             GetWindowRect(g_hSizeSlider, &sr);
             MapWindowPoints(HWND_DESKTOP, hwnd, (LPPOINT)&sr, 2);
-            if (PtInRect(&sr, pt) && IsWindowVisible(g_hSizeSlider)) {
+            bool onSlider = PtInRect(&sr, pt) && IsWindowVisible(g_hSizeSlider);
+            if (onSlider) {
+                SetFocus(hwnd);
                 dragging = true;
                 SetCapture(hwnd);
                 int margin = 5;
@@ -3127,8 +3274,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 else {
                     RenderOverlay();
                 }
+                return 0;
             }
-            break;
+            HWND hChild = ChildWindowFromPoint(hwnd, pt);
+            if (hChild != NULL && hChild != hwnd) {
+                UINT id = GetDlgCtrlID(hChild);
+                if (id == ID_OFFSET_X_DISPLAY || id == ID_OFFSET_Y_DISPLAY || id == ID_SIZE_DISPLAY || id == ID_HOTKEY_TOGGLE_DISPLAY || id == ID_HOTKEY_SETTINGS_DISPLAY || id == ID_HOTKEY_QUIT_DISPLAY) {
+                }
+                else {
+                    SetFocus(hwnd);
+                }
+            } 
+            else {
+                SetFocus(hwnd);
+            }
+            return DefWindowProc(hwnd, uMsg, wParam, lParam);
         }
         case WM_MOUSEMOVE:
             if (dragging && (wParam & MK_LBUTTON)) {
