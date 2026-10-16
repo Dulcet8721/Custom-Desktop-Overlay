@@ -28,6 +28,7 @@
 #define ID_TRAY_EXIT 1002
 #define ID_TRAY_SHOW 1003
 #define ID_TRAY_HIDE_OVERLAY 1004
+#define ID_TRAY_NEXT_IMAGE 1005
 #define WM_TRAYICON (WM_USER + 1)
 #define ID_IMAGE_LIST 2002
 #define ID_BROWSE_BUTTON 2003
@@ -50,6 +51,9 @@
 #define ID_RESET_SETTINGS 2027
 #define ID_RESET_QUIT 2028
 #define ID_ANIMATION_TIMER 2029
+#define ID_HOTKEY_CYCLE_DISPLAY 2030
+#define ID_REVERSE_DIRECTION_CHECKBOX 2031
+#define ID_RESET_CYCLE 2032
 #define WM_UPDATE_MONITOR_NAMES (WM_APP + 1)
 #define WM_SHOW_AND_MESSAGE (WM_APP + 2)
 using namespace Gdiplus;
@@ -280,8 +284,7 @@ public:
             return;
         m_hwndOverlay = hwndOverlay;
         if (m_frames.size() > 1 && m_hwndOverlay) {
-            if (m_timerId)
-                KillTimer(m_hwndOverlay, m_timerId);
+            if (m_timerId) KillTimer(m_hwndOverlay, m_timerId);
             m_timerId = SetTimer(m_hwndOverlay, ID_ANIMATION_TIMER, m_frames[m_currentFrame.load()].delay, NULL);
         }
     }
@@ -321,19 +324,19 @@ public:
         return m_scaledFrames[index];
     }
     bool IsInitialized() const {
-        return m_isInitialized;
+        return m_isInitialized; 
     }
     bool IsAnimated() const {
-        return m_frames.size() > 1;
+        return m_frames.size() > 1; 
     }
     int GetWidth() const {
-        return (int)m_width;
+        return (int)m_width; 
     }
     int GetHeight() const {
-        return (int)m_height;
+        return (int)m_height; 
     }
     UINT GetCurrentFrameIndex() const {
-        return m_currentFrame.load();
+        return m_currentFrame.load(); 
     }
     void ClearCache() {
         std::lock_guard<std::mutex> lock(m_cacheMutex);
@@ -389,6 +392,8 @@ void UpdateOverlayPosition();
 void RenderOverlay();
 void RenderOverlayInThread();
 void ApplyScaleChange();
+void CycleImageSelection();
+void ToggleReverseDirection();
 NOTIFYICONDATA nid = {};
 HWND g_hwnd = NULL;
 HWND g_hImageList = NULL;
@@ -400,15 +405,18 @@ HWND g_hOffsetYDisplay = NULL;
 HWND g_hSizeSlider = NULL;
 HWND g_hSizeDisplay = NULL;
 HWND g_hHotkeyToggleDisplay = NULL;
+HWND g_hHotkeySettingsDisplay = NULL;
+HWND g_hHotkeyCycleDisplay = NULL;
 HWND g_hHotkeyQuitDisplay = NULL;
 HWND g_hThemeButton = NULL;
-HWND g_hHotkeySettingsDisplay = NULL;
 HWND g_hTabButton1 = NULL;
 HWND g_hTabButton2 = NULL;
 HWND g_hTabButton3 = NULL;
 HWND g_hResetToggle = NULL;
 HWND g_hResetSettings = NULL;
+HWND g_hResetCycle = NULL;
 HWND g_hResetQuit = NULL;
+HWND g_hReverseDirectionCheckbox = NULL;
 HFONT g_hTabFont = NULL;
 HFONT g_hMenuFont = NULL;
 HICON g_hMainIcon = NULL;
@@ -443,9 +451,11 @@ bool g_darkTheme = false;
 #define DEFAULT_TOGGLE_KEY L'H'
 #define DEFAULT_QUIT_KEY L'Q'
 #define DEFAULT_SETTINGS_KEY L'S'
+#define DEFAULT_CYCLE_KEY L'N'
 wchar_t g_toggleHotkeyKey = DEFAULT_TOGGLE_KEY;
 wchar_t g_quitHotkeyKey = DEFAULT_QUIT_KEY;
 wchar_t g_settingsHotkeyKey = DEFAULT_SETTINGS_KEY;
+wchar_t g_cycleHotkeyKey = DEFAULT_CYCLE_KEY;
 int g_windowX = CW_USEDEFAULT;
 int g_windowY = CW_USEDEFAULT;
 COLORREF g_textColor = RGB(0, 0, 0);
@@ -458,6 +468,8 @@ COLORREF g_menuSelectedColor = RGB(220, 220, 220);
 wchar_t g_lastValidToggleKey = DEFAULT_TOGGLE_KEY;
 wchar_t g_lastValidQuitKey = DEFAULT_QUIT_KEY;
 wchar_t g_lastValidSettingsKey = DEFAULT_SETTINGS_KEY;
+wchar_t g_lastValidCycleKey = DEFAULT_CYCLE_KEY;
+bool g_reverseDirection = false;
 int g_imageListSelected = -1;
 int g_monitorListSelected = -1;
 int g_imageListScrollPos = 0;
@@ -470,6 +482,7 @@ EditField g_offsetYField = {L"0", false, 0, 0, false, ID_OFFSET_Y_DISPLAY, NULL,
 EditField g_sizeField = {L"1.00", false, 0, 0, false, ID_SIZE_DISPLAY, NULL, false};
 EditField g_hotkeyToggleField = {L"H", false, 0, 0, false, ID_HOTKEY_TOGGLE_DISPLAY, NULL, false};
 EditField g_hotkeySettingsField = {L"S", false, 0, 0, false, ID_HOTKEY_SETTINGS_DISPLAY, NULL, false};
+EditField g_hotkeyCycleField = {L"N", false, 0, 0, false, ID_HOTKEY_CYCLE_DISPLAY, NULL, false};
 EditField g_hotkeyQuitField = {L"Q", false, 0, 0, false, ID_HOTKEY_QUIT_DISPLAY, NULL, false};
 static int g_prevMonitorCount = 0;
 static std::vector<RECT> g_prevMonitorRects;
@@ -497,6 +510,7 @@ WNDPROC g_oldOffsetYProc = NULL;
 WNDPROC g_oldSizeProc = NULL;
 WNDPROC g_oldHotkeyToggleProc = NULL;
 WNDPROC g_oldHotkeySettingsProc = NULL;
+WNDPROC g_oldHotkeyCycleProc = NULL;
 WNDPROC g_oldHotkeyQuitProc = NULL;
 WNDPROC g_oldTabButton1Proc = NULL;
 WNDPROC g_oldTabButton2Proc = NULL;
@@ -505,8 +519,10 @@ WNDPROC g_oldBrowseButtonProc = NULL;
 WNDPROC g_oldThemeButtonProc = NULL;
 WNDPROC g_oldResetToggleProc = NULL;
 WNDPROC g_oldResetSettingsProc = NULL;
+WNDPROC g_oldResetCycleProc = NULL;
 WNDPROC g_oldResetQuitProc = NULL;
 WNDPROC g_oldHideOverlayCheckboxProc = NULL;
+WNDPROC g_oldReverseDirectionCheckboxProc = NULL;
 LRESULT CALLBACK OverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 std::wstring GetIniFilePath() {
     wchar_t exePath[MAX_PATH] = {0};
@@ -561,7 +577,7 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 std::vector<std::pair<std::wstring, std::wstring>> GetMonitorFriendlyNamesPowerShellWithInstance() {
     std::vector<std::pair<std::wstring, std::wstring>> result;
     HANDLE hReadPipe, hWritePipe;
-    SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
+    SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
     if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) 
         return result;
     STARTUPINFOW si = {sizeof(STARTUPINFOW)};
@@ -646,7 +662,8 @@ void LoadMonitorNamesThread() {
     std::map<std::wstring, std::wstring> modelToName;
     for (const auto& pair : psPairs) {
         std::wstring model = ExtractModelFromInstanceName(pair.first);
-        if (!model.empty()) modelToName[model] = pair.second;
+        if (!model.empty()) 
+            modelToName[model] = pair.second;
     }
     {
         std::unique_lock<std::shared_mutex> lock(g_monitorMutex);
@@ -975,7 +992,8 @@ void DrawOwnerDrawEdit(HDC hdc, HWND hwnd, EditField* field, bool darkTheme, boo
         SelectObject(hdc, hOldFont);
     }
     COLORREF borderColor = darkTheme ? RGB(80,80,80) : RGB(150,150,150);
-    if (field->hasFocus) borderColor = darkTheme ? RGB(255,255,255) : RGB(0,0,0);
+    if (field->hasFocus) 
+        borderColor = darkTheme ? RGB(255,255,255) : RGB(0,0,0);
     HPEN hBorderPen = CreatePen(PS_SOLID, 1, borderColor);
     HPEN hOldPen = (HPEN)SelectObject(hdc, hBorderPen);
     HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
@@ -1005,7 +1023,7 @@ void DrawOwnerDrawEdit(HDC hdc, HWND hwnd, EditField* field, bool darkTheme, boo
     SelectObject(hdc, hOldFont);
 }
 void DrawMenuItem(HDC hdc, RECT rc, const std::wstring& text, bool isSelected, bool isChecked, bool isDisabled, bool isTrayHideOverlay) {
-    bool isTrayMenuItem = isTrayHideOverlay || text == L"Settings" || text == L"Quit";
+    bool isTrayMenuItem = isTrayHideOverlay || text == L"Settings" || text == L"Quit" || text == L"Next Image";
     HBRUSH bgBrush = isSelected ? g_hMenuSelectedBrush.get() : g_hMenuBackgroundBrush.get();
     FillRect(hdc, &rc, bgBrush);
     if (isTrayMenuItem && isTrayHideOverlay) {
@@ -1159,7 +1177,10 @@ LRESULT HandleOwnerDrawCheckbox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_LBUTTONUP:
             InvalidateRect(hwnd, NULL, TRUE);
             ReleaseCapture();
-            ToggleHideOverlay();
+            if (GetDlgCtrlID(hwnd) == ID_HIDE_OVERLAY_CHECKBOX)
+                ToggleHideOverlay();
+            else if (GetDlgCtrlID(hwnd) == ID_REVERSE_DIRECTION_CHECKBOX)
+                ToggleReverseDirection();
             break;
         case WM_PAINT: {
             PAINTSTRUCT ps;
@@ -1168,7 +1189,8 @@ LRESULT HandleOwnerDrawCheckbox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             GetWindowText(hwnd, buffer, 256);
             std::wstring text = buffer;
             if (!text.empty() && text[0] == L' ') text = text.substr(1);
-            DrawOwnerDrawCheckbox(hdc, hwnd, g_hideOverlay, text, hoverState[hwnd]);
+            bool isChecked = (GetDlgCtrlID(hwnd) == ID_HIDE_OVERLAY_CHECKBOX) ? g_hideOverlay : g_reverseDirection;
+            DrawOwnerDrawCheckbox(hdc, hwnd, isChecked, text, hoverState[hwnd]);
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -1312,7 +1334,7 @@ void ApplyOffsetFromField(EditField* field, bool isX) {
             value = std::stoi(field->text);
     }
     catch (...) {
-        value = 0;
+        value = 0; 
     }
     if (value > 9999) 
         value = 9999;
@@ -1327,10 +1349,11 @@ void ApplyOffsetFromField(EditField* field, bool isX) {
 void ApplyScaleFromField(EditField* field) {
     float value = 1.0f;
     try {
-        if (!field->text.empty()) value = std::stof(field->text);
+        if (!field->text.empty()) 
+            value = std::stof(field->text);
     } 
     catch (...) {
-        value = 1.0f;
+        value = 1.0f; 
     }
     if (value < 0.0f) 
         value = 0.0f;
@@ -1360,14 +1383,16 @@ bool ResetHotkeyField(int fieldId, wchar_t defaultKey, wchar_t& currentKey, wcha
     return oldKey != currentKey;
 }
 void ApplyHotkeyFromField(EditField* field, int id) {
-    wchar_t oldToggle = g_toggleHotkeyKey, oldQuit = g_quitHotkeyKey, oldSettings = g_settingsHotkeyKey;
+    wchar_t oldToggle = g_toggleHotkeyKey, oldSettings = g_settingsHotkeyKey, oldCycle = g_cycleHotkeyKey, oldQuit = g_quitHotkeyKey;
     if (field->text.empty()) {
-        if (id == 1)
+        if (id == 1) 
             g_toggleHotkeyKey = 0;
         else if (id == 2) 
-            g_quitHotkeyKey = 0;
-        else if (id == 3) 
             g_settingsHotkeyKey = 0;
+        else if (id == 3) 
+            g_cycleHotkeyKey = 0;
+        else if (id == 4) 
+            g_quitHotkeyKey = 0;
     } 
     else {
         wchar_t key = std::towupper(field->text[0]);
@@ -1381,38 +1406,51 @@ void ApplyHotkeyFromField(EditField* field, int id) {
                     g_toggleHotkeyKey = g_lastValidToggleKey;
                 } 
                 else if (id == 2) {
-                    field->text = g_lastValidQuitKey ? std::wstring(1, g_lastValidQuitKey) : L"";
-                    g_quitHotkeyKey = g_lastValidQuitKey;
-                } 
-                else if (id == 3) {
                     field->text = g_lastValidSettingsKey ? std::wstring(1, g_lastValidSettingsKey) : L"";
                     g_settingsHotkeyKey = g_lastValidSettingsKey;
+                } 
+                else if (id == 3) {
+                    field->text = g_lastValidCycleKey ? std::wstring(1, g_lastValidCycleKey) : L"";
+                    g_cycleHotkeyKey = g_lastValidCycleKey;
+                } 
+                else if (id == 4) {
+                    field->text = g_lastValidQuitKey ? std::wstring(1, g_lastValidQuitKey) : L"";
+                    g_quitHotkeyKey = g_lastValidQuitKey;
                 }
             } 
             else {
                 if (id == 1) {
-                    g_toggleHotkeyKey = key; g_lastValidToggleKey = key; 
+                    g_toggleHotkeyKey = key; 
+                    g_lastValidToggleKey = key; 
                 }
                 else if (id == 2) {
-                    g_quitHotkeyKey = key; g_lastValidQuitKey = key; 
+                    g_settingsHotkeyKey = key; 
+                    g_lastValidSettingsKey = key; 
                 }
                 else if (id == 3) {
-                    g_settingsHotkeyKey = key; g_lastValidSettingsKey = key; 
-                }
+                    g_cycleHotkeyKey = key; 
+                    g_lastValidCycleKey = key; }
+                else if (id == 4) {
+                    g_quitHotkeyKey = key; 
+                    g_lastValidQuitKey = key; }
             }
         } 
         else {
             if (id == 1) {
                 field->text = g_lastValidToggleKey ? std::wstring(1, g_lastValidToggleKey) : L"";
                 g_toggleHotkeyKey = g_lastValidToggleKey;
-            }
-            else if (id == 2) {
-                field->text = g_lastValidQuitKey ? std::wstring(1, g_lastValidQuitKey) : L"";
-                g_quitHotkeyKey = g_lastValidQuitKey;
             } 
-            else if (id == 3) {
+            else if (id == 2) {
                 field->text = g_lastValidSettingsKey ? std::wstring(1, g_lastValidSettingsKey) : L"";
                 g_settingsHotkeyKey = g_lastValidSettingsKey;
+            } 
+            else if (id == 3) {
+                field->text = g_lastValidCycleKey ? std::wstring(1, g_lastValidCycleKey) : L"";
+                g_cycleHotkeyKey = g_lastValidCycleKey;
+            } 
+            else if (id == 4) {
+                field->text = g_lastValidQuitKey ? std::wstring(1, g_lastValidQuitKey) : L"";
+                g_quitHotkeyKey = g_lastValidQuitKey;
             }
         }
     }
@@ -1505,13 +1543,25 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
                 case ID_HOTKEY_TOGGLE_DISPLAY: {
                     wchar_t old = g_toggleHotkeyKey;
                     ApplyHotkeyFromField(field, 1);
-                    if (old != g_toggleHotkeyKey) {RegisterHotkeys(); g_settingsChanged = true;}
+                    if (old != g_toggleHotkeyKey) {
+                        RegisterHotkeys(); 
+                        g_settingsChanged = true; 
+                    }
                     break;
                 }
                 case ID_HOTKEY_SETTINGS_DISPLAY: {
                     wchar_t old = g_settingsHotkeyKey;
-                    ApplyHotkeyFromField(field, 3);
+                    ApplyHotkeyFromField(field, 2);
                     if (old != g_settingsHotkeyKey) {
+                        RegisterHotkeys(); 
+                        g_settingsChanged = true; 
+                    }
+                    break;
+                }
+                case ID_HOTKEY_CYCLE_DISPLAY: {
+                    wchar_t old = g_cycleHotkeyKey;
+                    ApplyHotkeyFromField(field, 3);
+                    if (old != g_cycleHotkeyKey) {
                         RegisterHotkeys(); 
                         g_settingsChanged = true; 
                     }
@@ -1519,7 +1569,7 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
                 }
                 case ID_HOTKEY_QUIT_DISPLAY: {
                     wchar_t old = g_quitHotkeyKey;
-                    ApplyHotkeyFromField(field, 2);
+                    ApplyHotkeyFromField(field, 4);
                     if (old != g_quitHotkeyKey) {
                         RegisterHotkeys(); g_settingsChanged = true; 
                     }
@@ -1534,7 +1584,7 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
                         field->cursorPos = std::min(field->selStart, field->cursorPos);
                         field->selStart = field->cursorPos;
                         InvalidateRect(hwnd, NULL, TRUE);
-                    }
+                    } 
                     else if (field->cursorPos > 0) {
                         field->cursorPos--;
                         field->selStart = field->cursorPos;
@@ -1594,7 +1644,7 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
             wchar_t ch = (wchar_t)wParam;
             if (ch == VK_RETURN || ch == VK_ESCAPE) 
                 return 0;
-            if (field->id == ID_HOTKEY_TOGGLE_DISPLAY || field->id == ID_HOTKEY_SETTINGS_DISPLAY || field->id == ID_HOTKEY_QUIT_DISPLAY) {
+            if (field->id == ID_HOTKEY_TOGGLE_DISPLAY || field->id == ID_HOTKEY_SETTINGS_DISPLAY || field->id == ID_HOTKEY_CYCLE_DISPLAY || field->id == ID_HOTKEY_QUIT_DISPLAY) {
                 if (IsValidHotkeyChar(ch)) {
                     field->text = std::wstring(1, std::towupper(ch));
                     field->cursorPos = 1;
@@ -1617,7 +1667,8 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
                 else if (field->id == ID_SIZE_DISPLAY) {
                     allowed = ((ch >= L'0' && ch <= L'9') || ch == L'.');
                 }
-                if (!allowed) return 0;
+                if (!allowed) 
+                    return 0;
                 if (field->selStart != field->cursorPos) {
                     int start = std::min(field->selStart, field->cursorPos);
                     int end = std::max(field->selStart, field->cursorPos);
@@ -1684,6 +1735,9 @@ LRESULT CALLBACK HotkeyToggleSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LP
 LRESULT CALLBACK HotkeySettingsSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return HandleOwnerDrawEdit(hwnd, msg, wParam, lParam, &g_hotkeySettingsField);
 }
+LRESULT CALLBACK HotkeyCycleSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawEdit(hwnd, msg, wParam, lParam, &g_hotkeyCycleField);
+}
 LRESULT CALLBACK HotkeyQuitSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return HandleOwnerDrawEdit(hwnd, msg, wParam, lParam, &g_hotkeyQuitField);
 }
@@ -1708,10 +1762,16 @@ LRESULT CALLBACK ResetToggleSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 LRESULT CALLBACK ResetSettingsSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_RESET_SETTINGS);
 }
+LRESULT CALLBACK ResetCycleSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_RESET_CYCLE);
+}
 LRESULT CALLBACK ResetQuitSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_RESET_QUIT);
 }
 LRESULT CALLBACK HideOverlayCheckboxSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawCheckbox(hwnd, msg, wParam, lParam);
+}
+LRESULT CALLBACK ReverseDirectionCheckboxSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return HandleOwnerDrawCheckbox(hwnd, msg, wParam, lParam);
 }
 void AddImageToList(const std::wstring& filePath, bool saveToIni) {
@@ -1745,12 +1805,15 @@ void LoadAllSettingsFromIni() {
         g_windowX = (sw - 300) / 2;
         g_windowY = (sh - 300) / 2;
         g_toggleHotkeyKey = DEFAULT_TOGGLE_KEY;
-        g_quitHotkeyKey = DEFAULT_QUIT_KEY;
         g_settingsHotkeyKey = DEFAULT_SETTINGS_KEY;
+        g_cycleHotkeyKey = DEFAULT_CYCLE_KEY;
+        g_quitHotkeyKey = DEFAULT_QUIT_KEY;
         g_darkTheme = false;
+        g_reverseDirection = false;
         g_lastValidToggleKey = DEFAULT_TOGGLE_KEY;
-        g_lastValidQuitKey = DEFAULT_QUIT_KEY;
         g_lastValidSettingsKey = DEFAULT_SETTINGS_KEY;
+        g_lastValidCycleKey = DEFAULT_CYCLE_KEY;
+        g_lastValidQuitKey = DEFAULT_QUIT_KEY;
         g_settingsChanged = false;
         return;
     }
@@ -1792,7 +1855,7 @@ void LoadAllSettingsFromIni() {
     std::wstringstream ss; ss << std::fixed << std::setprecision(2) << loadedScale;
     UpdateEditFieldText(&g_sizeField, ss.str());
     wchar_t toggleKeyStr[10];
-    GetPrivateProfileStringW(L"Hotkeys", L"ToggleOverlay", std::wstring(1, DEFAULT_TOGGLE_KEY).c_str(), toggleKeyStr, 10, iniPath.c_str());
+    GetPrivateProfileStringW(L"Hotkeys", L"ToggleOverlayVisibility", std::wstring(1, DEFAULT_TOGGLE_KEY).c_str(), toggleKeyStr, 10, iniPath.c_str());
     if (wcslen(toggleKeyStr) > 0) {
         wchar_t key = std::towupper(toggleKeyStr[0]);
         if (IsValidHotkeyChar(key)) {
@@ -1804,11 +1867,11 @@ void LoadAllSettingsFromIni() {
             g_toggleHotkeyKey = DEFAULT_TOGGLE_KEY;
             g_lastValidToggleKey = DEFAULT_TOGGLE_KEY;
             UpdateEditFieldText(&g_hotkeyToggleField, std::wstring(1, DEFAULT_TOGGLE_KEY));
-            WritePrivateProfileStringW(L"Hotkeys", L"ToggleOverlay", std::wstring(1, DEFAULT_TOGGLE_KEY).c_str(), iniPath.c_str());
+            WritePrivateProfileStringW(L"Hotkeys", L"ToggleOverlayVisibility", std::wstring(1, DEFAULT_TOGGLE_KEY).c_str(), iniPath.c_str());
         }
     }
     wchar_t settingsKeyStr[10];
-    GetPrivateProfileStringW(L"Hotkeys", L"Settings", std::wstring(1, DEFAULT_SETTINGS_KEY).c_str(), settingsKeyStr, 10, iniPath.c_str());
+    GetPrivateProfileStringW(L"Hotkeys", L"ToggleSettingsWindowVisibility", std::wstring(1, DEFAULT_SETTINGS_KEY).c_str(), settingsKeyStr, 10, iniPath.c_str());
     if (wcslen(settingsKeyStr) > 0) {
         wchar_t key = std::towupper(settingsKeyStr[0]);
         if (IsValidHotkeyChar(key)) {
@@ -1820,9 +1883,28 @@ void LoadAllSettingsFromIni() {
             g_settingsHotkeyKey = DEFAULT_SETTINGS_KEY;
             g_lastValidSettingsKey = DEFAULT_SETTINGS_KEY;
             UpdateEditFieldText(&g_hotkeySettingsField, std::wstring(1, DEFAULT_SETTINGS_KEY));
-            WritePrivateProfileStringW(L"Hotkeys", L"Settings", std::wstring(1, DEFAULT_SETTINGS_KEY).c_str(), iniPath.c_str());
+            WritePrivateProfileStringW(L"Hotkeys", L"ToggleSettingsWindowVisibility", std::wstring(1, DEFAULT_SETTINGS_KEY).c_str(), iniPath.c_str());
         }
     }
+    wchar_t cycleKeyStr[10];
+    GetPrivateProfileStringW(L"Hotkeys", L"SwitchToNextImageFromList", std::wstring(1, DEFAULT_CYCLE_KEY).c_str(), cycleKeyStr, 10, iniPath.c_str());
+    if (wcslen(cycleKeyStr) > 0) {
+        wchar_t key = std::towupper(cycleKeyStr[0]);
+        if (IsValidHotkeyChar(key)) {
+            g_cycleHotkeyKey = key;
+            g_lastValidCycleKey = key;
+            UpdateEditFieldText(&g_hotkeyCycleField, std::wstring(1, key));
+        }
+        else {
+            g_cycleHotkeyKey = DEFAULT_CYCLE_KEY;
+            g_lastValidCycleKey = DEFAULT_CYCLE_KEY;
+            UpdateEditFieldText(&g_hotkeyCycleField, std::wstring(1, DEFAULT_CYCLE_KEY));
+            WritePrivateProfileStringW(L"Hotkeys", L"SwitchToNextImageFromList", std::wstring(1, DEFAULT_CYCLE_KEY).c_str(), iniPath.c_str());
+        }
+    }
+    wchar_t reverseStr[10];
+    GetPrivateProfileStringW(L"Hotkeys", L"ReverseDirection", L"0", reverseStr, 10, iniPath.c_str());
+    g_reverseDirection = (_wtoi(reverseStr) != 0);
     wchar_t quitKeyStr[10];
     GetPrivateProfileStringW(L"Hotkeys", L"Quit", std::wstring(1, DEFAULT_QUIT_KEY).c_str(), quitKeyStr, 10, iniPath.c_str());
     if (wcslen(quitKeyStr) > 0) {
@@ -1873,9 +1955,12 @@ void SaveAllSettingsToIni() {
     swprintf_s(scaleStr, 32, L"%.2f", g_imageScale.load());
     WritePrivateProfileStringW(L"Location & Size", L"ImageScale", scaleStr, iniPath.c_str());
     wchar_t toggleKey[2] = {g_toggleHotkeyKey, 0};
-    WritePrivateProfileStringW(L"Hotkeys", L"ToggleOverlay", g_toggleHotkeyKey ? toggleKey : L"", iniPath.c_str());
+    WritePrivateProfileStringW(L"Hotkeys", L"ToggleOverlayVisibility", g_toggleHotkeyKey ? toggleKey : L"", iniPath.c_str());
     wchar_t settingsKey[2] = {g_settingsHotkeyKey, 0};
-    WritePrivateProfileStringW(L"Hotkeys", L"Settings", g_settingsHotkeyKey ? settingsKey : L"", iniPath.c_str());
+    WritePrivateProfileStringW(L"Hotkeys", L"ToggleSettingsWindowVisibility", g_settingsHotkeyKey ? settingsKey : L"", iniPath.c_str());
+    wchar_t cycleKey[2] = {g_cycleHotkeyKey, 0};
+    WritePrivateProfileStringW(L"Hotkeys", L"SwitchToNextImageFromList", g_cycleHotkeyKey ? cycleKey : L"", iniPath.c_str());
+    WritePrivateProfileStringW(L"Hotkeys", L"ReverseDirection", g_reverseDirection ? L"1" : L"0", iniPath.c_str());
     wchar_t quitKey[2] = {g_quitHotkeyKey, 0};
     WritePrivateProfileStringW(L"Hotkeys", L"Quit", g_quitHotkeyKey ? quitKey : L"", iniPath.c_str());
     if (g_windowVisible) {
@@ -1891,14 +1976,20 @@ void CorrectOffsetValues() {
         const auto& m = g_monitors[g_selectedMonitor];
         int maxX = (m.rect.right - m.rect.left) / 2;
         int maxY = (m.rect.bottom - m.rect.top) / 2;
-        if (g_offsetX > maxX) g_offsetX = maxX;
-        if (g_offsetX < -maxX) g_offsetX = -maxX;
-        if (g_offsetY > maxY) g_offsetY = maxY;
-        if (g_offsetY < -maxY) g_offsetY = -maxY;
+        if (g_offsetX > maxX) 
+            g_offsetX = maxX;
+        if (g_offsetX < -maxX) 
+            g_offsetX = -maxX;
+        if (g_offsetY > maxY) 
+            g_offsetY = maxY;
+        if (g_offsetY < -maxY) 
+            g_offsetY = -maxY;
         UpdateEditFieldText(&g_offsetXField, std::to_wstring(g_offsetX));
         UpdateEditFieldText(&g_offsetYField, std::to_wstring(g_offsetY));
-        if (g_hOffsetXDisplay) InvalidateRect(g_hOffsetXDisplay, NULL, TRUE);
-        if (g_hOffsetYDisplay) InvalidateRect(g_hOffsetYDisplay, NULL, TRUE);
+        if (g_hOffsetXDisplay) 
+            InvalidateRect(g_hOffsetXDisplay, NULL, TRUE);
+        if (g_hOffsetYDisplay) 
+            InvalidateRect(g_hOffsetYDisplay, NULL, TRUE);
     }
     if (g_currentOverlay) 
         UpdateOverlayPosition();
@@ -1948,7 +2039,8 @@ void UpdateOverlayPosition() {
     }
     RECT currentRect;
     GetWindowRect(g_currentOverlay, &currentRect);
-    if (currentRect.left == x && currentRect.top == y) return;
+    if (currentRect.left == x && currentRect.top == y) 
+        return;
     SetWindowPos(g_currentOverlay, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     GetWindowRect(g_currentOverlay, &currentRect);
     g_overlayX = currentRect.left;
@@ -2046,7 +2138,7 @@ void StopRenderThread() {
         g_renderThreadShouldExit = true;
         SetEvent(g_renderEvent);
         if (g_renderThread.joinable()) g_renderThread.join();
-        g_renderThreadRunning = false;
+            g_renderThreadRunning = false;
         if (g_renderEvent) {
             CloseHandle(g_renderEvent);
             g_renderEvent = NULL;
@@ -2303,11 +2395,14 @@ void UpdateScaleControls() {
 void UpdateHotkeyEdits() {
     UpdateEditFieldText(&g_hotkeyToggleField, std::wstring(1, g_toggleHotkeyKey));
     UpdateEditFieldText(&g_hotkeySettingsField, std::wstring(1, g_settingsHotkeyKey));
+    UpdateEditFieldText(&g_hotkeyCycleField, std::wstring(1, g_cycleHotkeyKey));
     UpdateEditFieldText(&g_hotkeyQuitField, std::wstring(1, g_quitHotkeyKey));
     if (g_hHotkeyToggleDisplay)
         InvalidateRect(g_hHotkeyToggleDisplay, NULL, TRUE);
     if (g_hHotkeySettingsDisplay) 
         InvalidateRect(g_hHotkeySettingsDisplay, NULL, TRUE);
+    if (g_hHotkeyCycleDisplay)
+        InvalidateRect(g_hHotkeyCycleDisplay, NULL, TRUE);
     if (g_hHotkeyQuitDisplay) 
         InvalidateRect(g_hHotkeyQuitDisplay, NULL, TRUE);
 }
@@ -2316,6 +2411,7 @@ void UnregisterHotkeys() {
         UnregisterHotKey(g_hwnd, 1);
         UnregisterHotKey(g_hwnd, 2);
         UnregisterHotKey(g_hwnd, 3);
+        UnregisterHotKey(g_hwnd, 4);
     }
 }
 bool RegisterHotkeys() {
@@ -2324,9 +2420,11 @@ bool RegisterHotkeys() {
         return false;
     if (g_toggleHotkeyKey && !RegisterHotKey(g_hwnd, 1, MOD_ALT | MOD_NOREPEAT, g_toggleHotkeyKey)) 
         return false;
-    if (g_quitHotkeyKey && !RegisterHotKey(g_hwnd, 2, MOD_ALT | MOD_NOREPEAT, g_quitHotkeyKey)) 
+    if (g_settingsHotkeyKey && !RegisterHotKey(g_hwnd, 2, MOD_ALT | MOD_NOREPEAT, g_settingsHotkeyKey)) 
         return false;
-    if (g_settingsHotkeyKey && !RegisterHotKey(g_hwnd, 3, MOD_ALT | MOD_NOREPEAT, g_settingsHotkeyKey)) 
+    if (g_cycleHotkeyKey && !RegisterHotKey(g_hwnd, 3, MOD_ALT | MOD_NOREPEAT, g_cycleHotkeyKey)) 
+        return false;
+    if (g_quitHotkeyKey && !RegisterHotKey(g_hwnd, 4, MOD_ALT | MOD_NOREPEAT, g_quitHotkeyKey)) 
         return false;
     return true;
 }
@@ -2358,16 +2456,45 @@ void ToggleHideOverlay() {
     UpdateAllButtons();
     g_settingsChanged = true;
 }
+void ToggleReverseDirection() {
+    g_reverseDirection = !g_reverseDirection;
+    if (g_hReverseDirectionCheckbox) 
+        InvalidateRect(g_hReverseDirectionCheckbox, NULL, TRUE);
+    g_settingsChanged = true;
+}
+void CycleImageSelection() {
+    if (g_imageFiles.empty()) 
+        return;
+    int count = (int)g_imageFiles.size();
+    if (g_imageListSelected == -1) {
+        g_imageListSelected = g_reverseDirection ? count - 1 : 0;
+    } 
+    else {
+        if (g_reverseDirection) {
+            g_imageListSelected--;
+            if (g_imageListSelected < 0) 
+                g_imageListSelected = count - 1;
+        } 
+        else {
+            g_imageListSelected++;
+            if (g_imageListSelected >= count) g_imageListSelected = 0;
+        }
+    }
+    int visibleItems = VISIBLE_ITEMS_IMAGES;
+    if (g_imageListSelected < g_imageListScrollPos)
+        g_imageListScrollPos = g_imageListSelected;
+    else if (g_imageListSelected >= g_imageListScrollPos + visibleItems)
+        g_imageListScrollPos = g_imageListSelected - visibleItems + 1;
+    if (g_hImageList) 
+        InvalidateRect(g_hImageList, NULL, TRUE);
+    CreateOverlayWindow(g_imageFiles[g_imageListSelected].path, true);
+}
 LRESULT HandleHotkey(WPARAM wParam) {
     switch (wParam) {
         case 1: 
             ToggleHideOverlay(); 
             return 0;
         case 2: 
-            if (g_hwnd) 
-                PostMessage(g_hwnd, WM_DESTROY, 0, 0); 
-            return 0;
-        case 3:
             if (!IsWindowVisible(g_hwnd)) {
                 ShowWindow(g_hwnd, SW_RESTORE);
                 ForceForegroundWindow(g_hwnd);
@@ -2389,6 +2516,13 @@ LRESULT HandleHotkey(WPARAM wParam) {
                     }
                 }
             }
+            return 0;
+        case 3:
+            CycleImageSelection();
+            return 0;
+        case 4: 
+            if (g_hwnd) 
+                PostMessage(g_hwnd, WM_DESTROY, 0, 0); 
             return 0;
     }
     return 0;
@@ -2542,12 +2676,16 @@ bool CheckHotkeyConflict(wchar_t newKey, int excludeId, std::wstring& conflictAc
         conflictAction = L"Toggle Overlay Visibility"; 
         return true; 
     }
-    if (excludeId != 2 && newKey == g_quitHotkeyKey) {
-        conflictAction = L"Quit"; 
+    if (excludeId != 2 && newKey == g_settingsHotkeyKey) {
+        conflictAction = L"Toggle Settings Window Visibility"; 
         return true; 
     }
-    if (excludeId != 3 && newKey == g_settingsHotkeyKey) {
-        conflictAction = L"Toggle Settings Window Visibility"; 
+    if (excludeId != 3 && newKey == g_cycleHotkeyKey) {
+        conflictAction = L"Switch To Next Image From List";
+        return true; 
+    }
+    if (excludeId != 4 && newKey == g_quitHotkeyKey) {
+        conflictAction = L"Quit"; 
         return true; 
     }
     return false;
@@ -2692,26 +2830,30 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_hTabButton1 = CreateWindowW(L"BUTTON", L"Select Images", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 0, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON1, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hTabButton2 = CreateWindowW(L"BUTTON", L"Location && Size", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 99, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON2, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hTabButton3 = CreateWindowW(L"BUTTON", L"Hotkeys", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 198, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON3, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hImageList = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 7, 45, 280, VISIBLE_ITEMS_IMAGES*ITEM_HEIGHT+2, hwnd, (HMENU)ID_IMAGE_LIST, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hBrowseButton = CreateWindowW(L"BUTTON", L"Browse Image", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 7, 195, 280, 30, hwnd, (HMENU)ID_BROWSE_BUTTON, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hHideOverlayCheckbox = CreateWindowW(L"BUTTON", L" Hide Overlay", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 7, 250, 90, 20, hwnd, (HMENU)ID_HIDE_OVERLAY_CHECKBOX, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hThemeButton = CreateWindowW(L"BUTTON", L"Dark", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 237, 248, 50, 20, hwnd, (HMENU)ID_THEME_BUTTON, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hMonitorList = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | SS_OWNERDRAW, 7, 45, 280, VISIBLE_ITEMS_MONITORS*ITEM_HEIGHT+2, hwnd, (HMENU)ID_MONITOR_LIST, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hOffsetXDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 25, 115, 50, 20, hwnd, (HMENU)ID_OFFSET_X_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hOffsetYDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 25, 140, 50, 20, hwnd, (HMENU)ID_OFFSET_Y_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hSizeSlider = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 7, 180, 280, 20, hwnd, (HMENU)ID_SIZE_SLIDER, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hSizeDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 7, 205, 50, 20, hwnd, (HMENU)ID_SIZE_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hHotkeyToggleDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 40, 45, 30, 20, hwnd, (HMENU)ID_HOTKEY_TOGGLE_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hHotkeySettingsDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 40, 90, 30, 20, hwnd, (HMENU)ID_HOTKEY_SETTINGS_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hHotkeyQuitDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 40, 135, 30, 20, hwnd, (HMENU)ID_HOTKEY_QUIT_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hResetToggle = CreateWindowW(L"BUTTON", L"Reset", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 75, 45, 60, 20, hwnd, (HMENU)ID_RESET_TOGGLE, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hResetSettings = CreateWindowW(L"BUTTON", L"Reset", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 75, 90, 60, 20, hwnd, (HMENU)ID_RESET_SETTINGS, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hResetQuit = CreateWindowW(L"BUTTON", L"Reset", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 75, 135, 60, 20, hwnd, (HMENU)ID_RESET_QUIT, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hImageList = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 7, 47, 280, VISIBLE_ITEMS_IMAGES*ITEM_HEIGHT+2, hwnd, (HMENU)ID_IMAGE_LIST, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hBrowseButton = CreateWindowW(L"BUTTON", L"Browse Image", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 7, 196, 280, 30, hwnd, (HMENU)ID_BROWSE_BUTTON, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hHideOverlayCheckbox = CreateWindowW(L"BUTTON", L" Hide Overlay", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 7, 249, 90, 20, hwnd, (HMENU)ID_HIDE_OVERLAY_CHECKBOX, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hThemeButton = CreateWindowW(L"BUTTON", L"Dark", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 237, 249, 50, 20, hwnd, (HMENU)ID_THEME_BUTTON, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hMonitorList = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | SS_OWNERDRAW, 7, 47, 280, VISIBLE_ITEMS_MONITORS*ITEM_HEIGHT+2, hwnd, (HMENU)ID_MONITOR_LIST, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hOffsetXDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 25, 121, 50, 20, hwnd, (HMENU)ID_OFFSET_X_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hOffsetYDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 25, 144, 50, 20, hwnd, (HMENU)ID_OFFSET_Y_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hSizeSlider = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 7, 188, 280, 20, hwnd, (HMENU)ID_SIZE_SLIDER, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hSizeDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 7, 210, 50, 20, hwnd, (HMENU)ID_SIZE_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hHotkeyToggleDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 40, 47, 30, 20, hwnd, (HMENU)ID_HOTKEY_TOGGLE_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hHotkeySettingsDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 40, 89, 30, 20, hwnd, (HMENU)ID_HOTKEY_SETTINGS_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hHotkeyCycleDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 40, 131, 30, 20, hwnd, (HMENU)ID_HOTKEY_CYCLE_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hHotkeyQuitDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 40, 186, 30, 20, hwnd, (HMENU)ID_HOTKEY_QUIT_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hResetToggle = CreateWindowW(L"BUTTON", L"Reset", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 75, 47, 60, 20, hwnd, (HMENU)ID_RESET_TOGGLE, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hResetSettings = CreateWindowW(L"BUTTON", L"Reset", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 75, 89, 60, 20, hwnd, (HMENU)ID_RESET_SETTINGS, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hResetCycle = CreateWindowW(L"BUTTON", L"Reset", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 75, 131, 60, 20, hwnd, (HMENU)ID_RESET_CYCLE, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hReverseDirectionCheckbox = CreateWindowW(L"BUTTON", L" Reverse Direction", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 7, 151, 115, 20, hwnd, (HMENU)ID_REVERSE_DIRECTION_CHECKBOX, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hResetQuit = CreateWindowW(L"BUTTON", L"Reset", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 75, 186, 60, 20, hwnd, (HMENU)ID_RESET_QUIT, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_offsetXField.hwnd = g_hOffsetXDisplay;
             g_offsetYField.hwnd = g_hOffsetYDisplay;
             g_sizeField.hwnd = g_hSizeDisplay;
             g_hotkeyToggleField.hwnd = g_hHotkeyToggleDisplay;
             g_hotkeySettingsField.hwnd = g_hHotkeySettingsDisplay;
+            g_hotkeyCycleField.hwnd = g_hHotkeyCycleDisplay;
             g_hotkeyQuitField.hwnd = g_hHotkeyQuitDisplay;
             g_oldImageListProc = (WNDPROC)SetWindowLongPtr(g_hImageList, GWLP_WNDPROC, (LONG_PTR)ImageListSubclassProc);
             g_oldMonitorListProc = (WNDPROC)SetWindowLongPtr(g_hMonitorList, GWLP_WNDPROC, (LONG_PTR)MonitorListSubclassProc);
@@ -2720,6 +2862,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_oldSizeProc = (WNDPROC)SetWindowLongPtr(g_hSizeDisplay, GWLP_WNDPROC, (LONG_PTR)SizeSubclassProc);
             g_oldHotkeyToggleProc = (WNDPROC)SetWindowLongPtr(g_hHotkeyToggleDisplay, GWLP_WNDPROC, (LONG_PTR)HotkeyToggleSubclassProc);
             g_oldHotkeySettingsProc = (WNDPROC)SetWindowLongPtr(g_hHotkeySettingsDisplay, GWLP_WNDPROC, (LONG_PTR)HotkeySettingsSubclassProc);
+            g_oldHotkeyCycleProc = (WNDPROC)SetWindowLongPtr(g_hHotkeyCycleDisplay, GWLP_WNDPROC, (LONG_PTR)HotkeyCycleSubclassProc);
             g_oldHotkeyQuitProc = (WNDPROC)SetWindowLongPtr(g_hHotkeyQuitDisplay, GWLP_WNDPROC, (LONG_PTR)HotkeyQuitSubclassProc);
             g_oldTabButton1Proc = (WNDPROC)SetWindowLongPtr(g_hTabButton1, GWLP_WNDPROC, (LONG_PTR)TabButton1SubclassProc);
             g_oldTabButton2Proc = (WNDPROC)SetWindowLongPtr(g_hTabButton2, GWLP_WNDPROC, (LONG_PTR)TabButton2SubclassProc);
@@ -2728,8 +2871,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_oldThemeButtonProc = (WNDPROC)SetWindowLongPtr(g_hThemeButton, GWLP_WNDPROC, (LONG_PTR)ThemeButtonSubclassProc);
             g_oldResetToggleProc = (WNDPROC)SetWindowLongPtr(g_hResetToggle, GWLP_WNDPROC, (LONG_PTR)ResetToggleSubclassProc);
             g_oldResetSettingsProc = (WNDPROC)SetWindowLongPtr(g_hResetSettings, GWLP_WNDPROC, (LONG_PTR)ResetSettingsSubclassProc);
+            g_oldResetCycleProc = (WNDPROC)SetWindowLongPtr(g_hResetCycle, GWLP_WNDPROC, (LONG_PTR)ResetCycleSubclassProc);
             g_oldResetQuitProc = (WNDPROC)SetWindowLongPtr(g_hResetQuit, GWLP_WNDPROC, (LONG_PTR)ResetQuitSubclassProc);
             g_oldHideOverlayCheckboxProc = (WNDPROC)SetWindowLongPtr(g_hHideOverlayCheckbox, GWLP_WNDPROC, (LONG_PTR)HideOverlayCheckboxSubclassProc);
+            g_oldReverseDirectionCheckboxProc = (WNDPROC)SetWindowLongPtr(g_hReverseDirectionCheckbox, GWLP_WNDPROC, (LONG_PTR)ReverseDirectionCheckboxSubclassProc);
             if (g_hTabFont) {
                 SendMessage(g_hImageList, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
                 SendMessage(g_hBrowseButton, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
@@ -2742,9 +2887,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 SendMessage(g_hSizeDisplay, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
                 SendMessage(g_hHotkeyToggleDisplay, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
                 SendMessage(g_hHotkeySettingsDisplay, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
+                SendMessage(g_hHotkeyCycleDisplay, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
                 SendMessage(g_hHotkeyQuitDisplay, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
                 SendMessage(g_hResetToggle, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
                 SendMessage(g_hResetSettings, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
+                SendMessage(g_hResetCycle, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
+                SendMessage(g_hReverseDirectionCheckbox, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
                 SendMessage(g_hResetQuit, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
             }
             LoadAllSettingsFromIni();
@@ -2778,9 +2926,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             ShowWindow(g_hSizeDisplay, SW_HIDE);
             ShowWindow(g_hHotkeyToggleDisplay, SW_HIDE);
             ShowWindow(g_hHotkeySettingsDisplay, SW_HIDE);
+            ShowWindow(g_hHotkeyCycleDisplay, SW_HIDE);
             ShowWindow(g_hHotkeyQuitDisplay, SW_HIDE);
             ShowWindow(g_hResetToggle, SW_HIDE);
             ShowWindow(g_hResetSettings, SW_HIDE);
+            ShowWindow(g_hResetCycle, SW_HIDE);
+            ShowWindow(g_hReverseDirectionCheckbox, SW_HIDE);
             ShowWindow(g_hResetQuit, SW_HIDE);
             return 0;
         }
@@ -2796,7 +2947,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_prevMonitorRects.clear();
             {
                 std::shared_lock<std::shared_mutex> lock(g_monitorMutex);
-                for (const auto& m : g_monitors) g_prevMonitorRects.push_back(m.rect);
+                for (const auto& m : g_monitors) 
+                    g_prevMonitorRects.push_back(m.rect);
             }
             return 0;
         }
@@ -2822,6 +2974,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 case ID_TRAY_HIDE_OVERLAY:
                     ToggleHideOverlay();
                     break;
+                case ID_TRAY_NEXT_IMAGE:
+                    CycleImageSelection();
+                    break;
                 case ID_TRAY_EXIT:
                     DestroyWindow(hwnd);
                     break;
@@ -2836,9 +2991,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     ShowWindow(g_hSizeDisplay, SW_HIDE);
                     ShowWindow(g_hHotkeyToggleDisplay, SW_HIDE);
                     ShowWindow(g_hHotkeySettingsDisplay, SW_HIDE);
+                    ShowWindow(g_hHotkeyCycleDisplay, SW_HIDE);
                     ShowWindow(g_hHotkeyQuitDisplay, SW_HIDE);
                     ShowWindow(g_hResetToggle, SW_HIDE);
                     ShowWindow(g_hResetSettings, SW_HIDE);
+                    ShowWindow(g_hResetCycle, SW_HIDE);
+                    ShowWindow(g_hReverseDirectionCheckbox, SW_HIDE);
                     ShowWindow(g_hResetQuit, SW_HIDE);
                     InvalidateRect(hwnd, NULL, TRUE);
                     break;
@@ -2853,9 +3011,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     ShowWindow(g_hSizeDisplay, SW_SHOW);
                     ShowWindow(g_hHotkeyToggleDisplay, SW_HIDE);
                     ShowWindow(g_hHotkeySettingsDisplay, SW_HIDE);
+                    ShowWindow(g_hHotkeyCycleDisplay, SW_HIDE);
                     ShowWindow(g_hHotkeyQuitDisplay, SW_HIDE);
                     ShowWindow(g_hResetToggle, SW_HIDE);
                     ShowWindow(g_hResetSettings, SW_HIDE);
+                    ShowWindow(g_hResetCycle, SW_HIDE);
+                    ShowWindow(g_hReverseDirectionCheckbox, SW_HIDE);
                     ShowWindow(g_hResetQuit, SW_HIDE);
                     InvalidateRect(hwnd, NULL, TRUE);
                     break;
@@ -2870,9 +3031,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     ShowWindow(g_hSizeDisplay, SW_HIDE);
                     ShowWindow(g_hHotkeyToggleDisplay, SW_SHOW);
                     ShowWindow(g_hHotkeySettingsDisplay, SW_SHOW);
+                    ShowWindow(g_hHotkeyCycleDisplay, SW_SHOW);
                     ShowWindow(g_hHotkeyQuitDisplay, SW_SHOW);
                     ShowWindow(g_hResetToggle, SW_SHOW);
                     ShowWindow(g_hResetSettings, SW_SHOW);
+                    ShowWindow(g_hResetCycle, SW_SHOW);
+                    ShowWindow(g_hReverseDirectionCheckbox, SW_SHOW);
                     ShowWindow(g_hResetQuit, SW_SHOW);
                     InvalidateRect(hwnd, NULL, TRUE);
                     break;
@@ -2906,21 +3070,35 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 }
                 case ID_RESET_SETTINGS: {
                     wchar_t old = g_settingsHotkeyKey;
-                    if (ResetHotkeyField(3, DEFAULT_SETTINGS_KEY, g_settingsHotkeyKey, g_lastValidSettingsKey, g_hotkeySettingsField) && g_hHotkeySettingsDisplay)
+                    if (ResetHotkeyField(2, DEFAULT_SETTINGS_KEY, g_settingsHotkeyKey, g_lastValidSettingsKey, g_hotkeySettingsField) && g_hHotkeySettingsDisplay)
                         InvalidateRect(g_hHotkeySettingsDisplay, NULL, TRUE);
                     RegisterHotkeys();
                     if (old != g_settingsHotkeyKey) 
                         g_settingsChanged = true;
                     break;
                 }
-                case ID_RESET_QUIT: {
-                    wchar_t old = g_quitHotkeyKey;
-                    if (ResetHotkeyField(2, DEFAULT_QUIT_KEY, g_quitHotkeyKey, g_lastValidQuitKey, g_hotkeyQuitField) && g_hHotkeyQuitDisplay)
-                        InvalidateRect(g_hHotkeyQuitDisplay, NULL, TRUE);
+                case ID_RESET_CYCLE: {
+                    wchar_t old = g_cycleHotkeyKey;
+                    if (ResetHotkeyField(3, DEFAULT_CYCLE_KEY, g_cycleHotkeyKey, g_lastValidCycleKey, g_hotkeyCycleField) && g_hHotkeyCycleDisplay)
+                        InvalidateRect(g_hHotkeyCycleDisplay, NULL, TRUE);
                     RegisterHotkeys();
-                    if (old != g_quitHotkeyKey) g_settingsChanged = true;
+                    if (old != g_cycleHotkeyKey) 
+                        g_settingsChanged = true;
                     break;
                 }
+                case ID_RESET_QUIT: {
+                    wchar_t old = g_quitHotkeyKey;
+                    if (ResetHotkeyField(4, DEFAULT_QUIT_KEY, g_quitHotkeyKey, g_lastValidQuitKey, g_hotkeyQuitField) && g_hHotkeyQuitDisplay)
+                        InvalidateRect(g_hHotkeyQuitDisplay, NULL, TRUE);
+                    RegisterHotkeys();
+                    if (old != g_quitHotkeyKey) 
+                        g_settingsChanged = true;
+                    break;
+                }
+                case ID_REVERSE_DIRECTION_CHECKBOX:
+                    if (HIWORD(wParam) == BN_CLICKED) 
+                        ToggleReverseDirection();
+                    break;
             }
             return 0;
         case WM_SYSCOMMAND: {
@@ -2954,14 +3132,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             return 0;
         case WM_DRAWITEM: {
             DRAWITEMSTRUCT* pDraw = (DRAWITEMSTRUCT*)lParam;
-            if (pDraw->CtlID == ID_HIDE_OVERLAY_CHECKBOX) {
+            if (pDraw->CtlID == ID_HIDE_OVERLAY_CHECKBOX || pDraw->CtlID == ID_REVERSE_DIRECTION_CHECKBOX) {
                 wchar_t buffer[256]; GetWindowText(pDraw->hwndItem, buffer, 256);
                 std::wstring text = buffer;
-                if (!text.empty() && text[0] == L' ') text = text.substr(1);
-                DrawOwnerDrawCheckbox(pDraw->hDC, pDraw->hwndItem, g_hideOverlay, text, false);
+                if (!text.empty() && text[0] == L' ') 
+                    text = text.substr(1);
+                bool isChecked = (pDraw->CtlID == ID_HIDE_OVERLAY_CHECKBOX) ? g_hideOverlay : g_reverseDirection;
+                DrawOwnerDrawCheckbox(pDraw->hDC, pDraw->hwndItem, isChecked, text, false);
                 return TRUE;
             }
-            else if (pDraw->CtlID == ID_TAB_BUTTON1 || pDraw->CtlID == ID_TAB_BUTTON2 || pDraw->CtlID == ID_TAB_BUTTON3 || pDraw->CtlID == ID_BROWSE_BUTTON || pDraw->CtlID == ID_THEME_BUTTON || pDraw->CtlID == ID_RESET_TOGGLE || pDraw->CtlID == ID_RESET_SETTINGS || pDraw->CtlID == ID_RESET_QUIT) {
+            else if (pDraw->CtlID == ID_TAB_BUTTON1 || pDraw->CtlID == ID_TAB_BUTTON2 || pDraw->CtlID == ID_TAB_BUTTON3 || pDraw->CtlID == ID_BROWSE_BUTTON || pDraw->CtlID == ID_THEME_BUTTON || pDraw->CtlID == ID_RESET_TOGGLE || pDraw->CtlID == ID_RESET_SETTINGS || pDraw->CtlID == ID_RESET_CYCLE || pDraw->CtlID == ID_RESET_QUIT) {
                 wchar_t buffer[256]; GetWindowText(pDraw->hwndItem, buffer, 256);
                 bool isPressed = (pDraw->itemState & ODS_SELECTED) != 0;
                 bool isActiveTab = (pDraw->CtlID == ID_TAB_BUTTON1 && g_activeTab == 1) || (pDraw->CtlID == ID_TAB_BUTTON2 && g_activeTab == 2) || (pDraw->CtlID == ID_TAB_BUTTON3 && g_activeTab == 3);
@@ -2989,6 +3169,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                         break;
                     case ID_TRAY_SHOW: 
                         menuText = L"Settings"; 
+                        break;
+                    case ID_TRAY_NEXT_IMAGE:
+                        menuText = L"Next Image";
                         break;
                     case ID_TRAY_EXIT: 
                         menuText = L"Quit"; 
@@ -3020,7 +3203,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             return (LRESULT)g_hBackgroundBrush.get();
         }
         case WM_CTLCOLORBTN:
-            if (g_hHideOverlayCheckbox && (HWND)lParam == g_hHideOverlayCheckbox) 
+            if ((g_hHideOverlayCheckbox && (HWND)lParam == g_hHideOverlayCheckbox) || (g_hReverseDirectionCheckbox && (HWND)lParam == g_hReverseDirectionCheckbox))
                 return 0;
             SetBkColor((HDC)wParam, g_darkTheme ? RGB(25,25,25) : RGB(255,255,255));
             SetTextColor((HDC)wParam, g_textColor);
@@ -3033,14 +3216,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             if (lParam == WM_LBUTTONDBLCLK) {
                 g_windowVisible = !g_windowVisible;
                 ShowWindow(hwnd, g_windowVisible ? SW_RESTORE : SW_HIDE);
-                if (g_windowVisible) SetForegroundWindow(hwnd);
+                if (g_windowVisible) 
+                    SetForegroundWindow(hwnd);
             }
             else if (lParam == WM_RBUTTONUP) {
                 POINT pt; GetCursorPos(&pt);
                 HMENU hMenu = CreatePopupMenu();
                 CreateOwnerDrawMenu(hMenu, 0, ID_TRAY_HIDE_OVERLAY, L"Hide Overlay");
                 CreateOwnerDrawMenu(hMenu, 1, ID_TRAY_SHOW, L"Settings");
-                CreateOwnerDrawMenu(hMenu, 2, ID_TRAY_EXIT, L"Quit");
+                CreateOwnerDrawMenu(hMenu, 2, ID_TRAY_NEXT_IMAGE, L"Next Image");
+                CreateOwnerDrawMenu(hMenu, 3, ID_TRAY_EXIT, L"Quit");
                 SetForegroundWindow(g_hwnd);
                 TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, g_hwnd, NULL);
                 DestroyMenu(hMenu);
@@ -3073,21 +3258,37 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 SetWindowLongPtr(g_hHotkeyToggleDisplay, GWLP_WNDPROC, (LONG_PTR)g_oldHotkeyToggleProc);
             if (g_oldHotkeySettingsProc) 
                 SetWindowLongPtr(g_hHotkeySettingsDisplay, GWLP_WNDPROC, (LONG_PTR)g_oldHotkeySettingsProc);
+            if (g_oldHotkeyCycleProc) 
+                SetWindowLongPtr(g_hHotkeyCycleDisplay, GWLP_WNDPROC, (LONG_PTR)g_oldHotkeyCycleProc);
             if (g_oldHotkeyQuitProc) 
                 SetWindowLongPtr(g_hHotkeyQuitDisplay, GWLP_WNDPROC, (LONG_PTR)g_oldHotkeyQuitProc);
-            if (g_oldTabButton1Proc) SetWindowLongPtr(g_hTabButton1, GWLP_WNDPROC, (LONG_PTR)g_oldTabButton1Proc);
-            if (g_oldTabButton2Proc) SetWindowLongPtr(g_hTabButton2, GWLP_WNDPROC, (LONG_PTR)g_oldTabButton2Proc);
-            if (g_oldTabButton3Proc) SetWindowLongPtr(g_hTabButton3, GWLP_WNDPROC, (LONG_PTR)g_oldTabButton3Proc);
-            if (g_oldBrowseButtonProc) SetWindowLongPtr(g_hBrowseButton, GWLP_WNDPROC, (LONG_PTR)g_oldBrowseButtonProc);
-            if (g_oldThemeButtonProc) SetWindowLongPtr(g_hThemeButton, GWLP_WNDPROC, (LONG_PTR)g_oldThemeButtonProc);
-            if (g_oldResetToggleProc) SetWindowLongPtr(g_hResetToggle, GWLP_WNDPROC, (LONG_PTR)g_oldResetToggleProc);
-            if (g_oldResetSettingsProc) SetWindowLongPtr(g_hResetSettings, GWLP_WNDPROC, (LONG_PTR)g_oldResetSettingsProc);
-            if (g_oldResetQuitProc) SetWindowLongPtr(g_hResetQuit, GWLP_WNDPROC, (LONG_PTR)g_oldResetQuitProc);
-            if (g_oldHideOverlayCheckboxProc) SetWindowLongPtr(g_hHideOverlayCheckbox, GWLP_WNDPROC, (LONG_PTR)g_oldHideOverlayCheckboxProc);
+            if (g_oldTabButton1Proc) 
+                SetWindowLongPtr(g_hTabButton1, GWLP_WNDPROC, (LONG_PTR)g_oldTabButton1Proc);
+            if (g_oldTabButton2Proc) 
+                SetWindowLongPtr(g_hTabButton2, GWLP_WNDPROC, (LONG_PTR)g_oldTabButton2Proc);
+            if (g_oldTabButton3Proc) 
+                SetWindowLongPtr(g_hTabButton3, GWLP_WNDPROC, (LONG_PTR)g_oldTabButton3Proc);
+            if (g_oldBrowseButtonProc) 
+                SetWindowLongPtr(g_hBrowseButton, GWLP_WNDPROC, (LONG_PTR)g_oldBrowseButtonProc);
+            if (g_oldThemeButtonProc) 
+                SetWindowLongPtr(g_hThemeButton, GWLP_WNDPROC, (LONG_PTR)g_oldThemeButtonProc);
+            if (g_oldResetToggleProc) 
+                SetWindowLongPtr(g_hResetToggle, GWLP_WNDPROC, (LONG_PTR)g_oldResetToggleProc);
+            if (g_oldResetSettingsProc) 
+                SetWindowLongPtr(g_hResetSettings, GWLP_WNDPROC, (LONG_PTR)g_oldResetSettingsProc);
+            if (g_oldResetCycleProc) 
+                SetWindowLongPtr(g_hResetCycle, GWLP_WNDPROC, (LONG_PTR)g_oldResetCycleProc);
+            if (g_oldResetQuitProc) 
+                SetWindowLongPtr(g_hResetQuit, GWLP_WNDPROC, (LONG_PTR)g_oldResetQuitProc);
+            if (g_oldHideOverlayCheckboxProc) 
+                SetWindowLongPtr(g_hHideOverlayCheckbox, GWLP_WNDPROC, (LONG_PTR)g_oldHideOverlayCheckboxProc);
+            if (g_oldReverseDirectionCheckboxProc) 
+                SetWindowLongPtr(g_hReverseDirectionCheckbox, GWLP_WNDPROC, (LONG_PTR)g_oldReverseDirectionCheckboxProc);
             StopRenderThread();
             UnregisterHotkeys();
-            if (g_settingsChanged) SaveAllSettingsToIni();
-                Shell_NotifyIcon(NIM_DELETE, &nid);
+            if (g_settingsChanged) 
+                SaveAllSettingsToIni();
+            Shell_NotifyIcon(NIM_DELETE, &nid);
             {
                 std::lock_guard<std::mutex> lock(g_renderDataMutex);
                 g_cachedBitmapShared.reset();
@@ -3139,13 +3340,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 RECT tr = {8, 30, 280, 50};
                 FillRect(hdc, &tr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Monitors List", -1, &tr, DT_LEFT | DT_TOP);
-                RECT otr = {8, 100, 280, 130};
+                RECT otr = {8, 104, 280, 130};
                 FillRect(hdc, &otr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Location Offset", -1, &otr, DT_LEFT | DT_TOP);
-                RECT xlr = {8, 118, 20, 155};
+                RECT xlr = {8, 124, 20, 155};
                 FillRect(hdc, &xlr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"X:", -1, &xlr, DT_LEFT | DT_TOP);
-                RECT ylr = {8, 143, 20, 180};
+                RECT ylr = {8, 147, 20, 180};
                 FillRect(hdc, &ylr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Y:", -1, &ylr, DT_LEFT | DT_TOP);
                 int maxX = 0, maxY = 0;
@@ -3159,17 +3360,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 }
                 std::wstring xb = L"[" + std::to_wstring(-maxX) + L"; " + std::to_wstring(maxX) + L"]";
                 std::wstring yb = L"[" + std::to_wstring(-maxY) + L"; " + std::to_wstring(maxY) + L"]";
-                RECT xbr = {85, 118, 220, 155};
+                RECT xbr = {85, 124, 220, 155};
                 FillRect(hdc, &xbr, g_hBackgroundBrush.get());
                 DrawText(hdc, xb.c_str(), -1, &xbr, DT_LEFT | DT_TOP);
-                RECT ybr = {85, 143, 220, 180};
+                RECT ybr = {85, 147, 220, 180};
                 FillRect(hdc, &ybr, g_hBackgroundBrush.get());
                 DrawText(hdc, yb.c_str(), -1, &ybr, DT_LEFT | DT_TOP);
-                RECT str = {8, 165, 280, 180};
+                RECT str = {8, 171, 280, 185};
                 FillRect(hdc, &str, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Size", -1, &str, DT_LEFT | DT_TOP);
                 std::wstring szb = L"[0.00; 2.00]";
-                RECT szbr = {67, 208, 200, 240};
+                RECT szbr = {67, 213, 200, 240};
                 FillRect(hdc, &szbr, g_hBackgroundBrush.get());
                 DrawText(hdc, szb.c_str(), -1, &szbr, DT_LEFT | DT_TOP);
             }
@@ -3177,21 +3378,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 RECT ttr = {8, 30, 280, 50};
                 FillRect(hdc, &ttr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Toggle Overlay Visibility:", -1, &ttr, DT_LEFT | DT_TOP);
-                RECT klr = {8, 48, 280, 68};
+                RECT klr = {8, 50, 280, 68};
                 FillRect(hdc, &klr, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Alt +", -1, &klr, DT_LEFT | DT_TOP);
-                RECT str = {8, 75, 280, 95};
+                RECT str = {8, 72, 280, 90};
                 FillRect(hdc, &str, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Toggle Settings Window Visibility:", -1, &str, DT_LEFT | DT_TOP);
-                RECT klr2 = {8, 93, 280, 113};
+                RECT klr2 = {8, 92, 280, 108};
                 FillRect(hdc, &klr2, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Alt +", -1, &klr2, DT_LEFT | DT_TOP);
-                RECT qtr = {8, 120, 280, 140};
-                FillRect(hdc, &qtr, g_hBackgroundBrush.get());
-                DrawText(hdc, L"Quit:", -1, &qtr, DT_LEFT | DT_TOP);
-                RECT klr3 = {8, 138, 280, 158};
+                RECT ctr = {8, 114, 282, 130};
+                FillRect(hdc, &ctr, g_hBackgroundBrush.get());
+                DrawText(hdc, L"Switch To Next Image From List:", -1, &ctr, DT_LEFT | DT_TOP);
+                RECT klr3 = {8, 134, 282, 148};
                 FillRect(hdc, &klr3, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Alt +", -1, &klr3, DT_LEFT | DT_TOP);
+                RECT qtr = {8, 169, 280, 184};
+                FillRect(hdc, &qtr, g_hBackgroundBrush.get());
+                DrawText(hdc, L"Quit:", -1, &qtr, DT_LEFT | DT_TOP);
+                RECT klr4 = {8, 189, 280, 202};
+                FillRect(hdc, &klr4, g_hBackgroundBrush.get());
+                DrawText(hdc, L"Alt +", -1, &klr4, DT_LEFT | DT_TOP);
                 RECT f1 = {8, 215, 280, 230};
                 FillRect(hdc, &f1, g_hBackgroundBrush.get());
                 DrawText(hdc, L"Allowed input: 0-9 and A-Z", -1, &f1, DT_LEFT | DT_TOP);
@@ -3279,8 +3486,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             HWND hChild = ChildWindowFromPoint(hwnd, pt);
             if (hChild != NULL && hChild != hwnd) {
                 UINT id = GetDlgCtrlID(hChild);
-                if (id == ID_OFFSET_X_DISPLAY || id == ID_OFFSET_Y_DISPLAY || id == ID_SIZE_DISPLAY || id == ID_HOTKEY_TOGGLE_DISPLAY || id == ID_HOTKEY_SETTINGS_DISPLAY || id == ID_HOTKEY_QUIT_DISPLAY) {
-                }
+                if (id == ID_OFFSET_X_DISPLAY || id == ID_OFFSET_Y_DISPLAY || id == ID_SIZE_DISPLAY || id == ID_HOTKEY_TOGGLE_DISPLAY || id == ID_HOTKEY_SETTINGS_DISPLAY || id == ID_HOTKEY_CYCLE_DISPLAY || id == ID_HOTKEY_QUIT_DISPLAY) {
+                } 
                 else {
                     SetFocus(hwnd);
                 }
