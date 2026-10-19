@@ -105,6 +105,11 @@ struct ButtonState {
 };
 struct ListBoxState {
     int hoverIndex;
+    int dragSource;
+    int dragTarget;
+    bool dragging;
+    bool dragPending;
+    POINT dragStart;
 };
 std::unordered_map<HWND, ButtonState> g_buttonStates;
 std::unordered_map<HWND, ListBoxState> g_listBoxStates;
@@ -897,22 +902,66 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type, int hoverIndex) {
     SetBkMode(hdc, TRANSPARENT);
     HFONT hOldFont = (HFONT)SelectObject(hdc, g_hTabFont);
     if (type == ID_IMAGE_LIST) {
+        int total = (int)g_imageFiles.size();
         int startIdx = g_imageListScrollPos;
-        int endIdx = std::min(startIdx + VISIBLE_ITEMS_IMAGES, (int)g_imageFiles.size());
-        for (int i = startIdx; i < endIdx; i++) {
-            RECT itemRect = {rc.left+1, rc.top+1 + (i-startIdx)*ITEM_HEIGHT, rc.right-1, rc.top+1 + (i-startIdx+1)*ITEM_HEIGHT};
-            HBRUSH bgBrush;
-            if (i == g_imageListSelected) 
-                bgBrush = g_hListBoxSelectedBrush.get();
-            else if (i == hoverIndex) 
-                bgBrush = g_hListBoxHoverBrush.get();
-            else bgBrush = g_hListBoxBackgroundBrush.get();
-            FillRect(hdc, &itemRect, bgBrush);
-            RECT textRect = itemRect;
-            textRect.left += 2;
-            DrawText(hdc, g_imageFiles[i].filename.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        int visibleItems = VISIBLE_ITEMS_IMAGES;
+        ListBoxState& state = g_listBoxStates[hwnd];
+        if (state.dragging && state.dragSource != -1) {
+            std::vector<int> displayIndices;
+            for (int i = 0; i < total; ++i)
+                if (i != state.dragSource)
+                    displayIndices.push_back(i);
+            int insertPos = state.dragTarget;
+            if (insertPos < 0) 
+                insertPos = 0;
+            if (insertPos > (int)displayIndices.size()) 
+                insertPos = (int)displayIndices.size();
+            displayIndices.insert(displayIndices.begin() + insertPos, -1);
+            for (int v = 0; v < (int)displayIndices.size(); ++v) {
+                if (v < startIdx) 
+                    continue;
+                if (v >= startIdx + visibleItems) 
+                    break;
+                RECT itemRect = {rc.left + 1, rc.top + 1 + (v - startIdx) * ITEM_HEIGHT, rc.right - 1, rc.top + 1 + (v - startIdx + 1) * ITEM_HEIGHT};
+                int realIdx = displayIndices[v];
+                if (realIdx == -1) {
+                    FillRect(hdc, &itemRect, g_hListBoxBackgroundBrush.get());
+                    HPEN hBorderPen = CreatePen(PS_DOT, 1, g_darkTheme ? RGB(150,150,150) : RGB(100,100,100));
+                    HPEN hOldPen = (HPEN)SelectObject(hdc, hBorderPen);
+                    HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                    Rectangle(hdc, itemRect.left, itemRect.top, itemRect.right, itemRect.bottom);
+                    SelectObject(hdc, hOldBrush);
+                    SelectObject(hdc, hOldPen);
+                    DeleteObject(hBorderPen);
+                } 
+                else {
+                    HBRUSH bgBrush = (realIdx == g_imageListSelected) ? g_hListBoxSelectedBrush.get() : g_hListBoxBackgroundBrush.get();
+                    FillRect(hdc, &itemRect, bgBrush);
+                    RECT textRect = itemRect;
+                    textRect.left += 2;
+                    std::wstring displayText = std::to_wstring(realIdx + 1) + L". " + g_imageFiles[realIdx].filename;
+                    DrawText(hdc, displayText.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                }
+            }
+        } 
+        else {
+            int endIdx = std::min(startIdx + visibleItems, total);
+            for (int i = startIdx; i < endIdx; i++) {
+                RECT itemRect = {rc.left + 1, rc.top + 1 + (i - startIdx) * ITEM_HEIGHT, rc.right - 1, rc.top + 1 + (i - startIdx + 1) * ITEM_HEIGHT};
+                HBRUSH bgBrush;
+                if (i == g_imageListSelected)
+                    bgBrush = g_hListBoxSelectedBrush.get();
+                else if (i == state.hoverIndex)
+                    bgBrush = g_hListBoxHoverBrush.get();
+                else bgBrush = g_hListBoxBackgroundBrush.get();
+                FillRect(hdc, &itemRect, bgBrush);
+                RECT textRect = itemRect;
+                textRect.left += 2;
+                std::wstring displayText = std::to_wstring(i + 1) + L". " + g_imageFiles[i].filename;
+                DrawText(hdc, displayText.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
         }
-    } 
+    }
     else if (type == ID_MONITOR_LIST) {
         int startIdx = g_monitorListScrollPos;
         int endIdx = std::min(startIdx + VISIBLE_ITEMS_MONITORS, (int)g_monitors.size());
@@ -1214,27 +1263,86 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             int itemIndex = startIdx + (yPos - 2) / ITEM_HEIGHT;
             int itemCount = (listType == ID_IMAGE_LIST) ? (int)g_imageFiles.size() : (int)g_monitors.size();
             int newHover = -1;
-            if (itemIndex >= 0 && itemIndex < itemCount && itemIndex >= startIdx && itemIndex < startIdx + visibleItems) 
+            if (itemIndex >= 0 && itemIndex < itemCount && itemIndex >= startIdx && itemIndex < startIdx + visibleItems)
                 newHover = itemIndex;
-            if (state.hoverIndex != newHover) {
+            if (state.hoverIndex != newHover && !state.dragging) {
                 state.hoverIndex = newHover;
                 InvalidateRect(hwnd, NULL, TRUE);
+            }
+            if (listType == ID_IMAGE_LIST) {
+                if (state.dragPending) {
+                    POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                    int dx = pt.x - state.dragStart.x;
+                    int dy = pt.y - state.dragStart.y;
+                    if (abs(dx) > 5 || abs(dy) > 5) {
+                        state.dragging = true;
+                        state.dragPending = false;
+                        g_imageListSelected = -1;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    }
+                }
+                if (state.dragging) {
+                    int total = (int)g_imageFiles.size();
+                    int yPos = GET_Y_LPARAM(lParam);
+                    int visibleItems = VISIBLE_ITEMS_IMAGES;
+                    int scrollPos = g_imageListScrollPos;
+                    std::vector<int> displayIndices;
+                    displayIndices.reserve(total);
+                    for (int i = 0; i < total; ++i)
+                        if (i != state.dragSource)
+                            displayIndices.push_back(i);
+                    int insertPos = state.dragTarget;
+                    if (insertPos < 0) 
+                        insertPos = 0;
+                    if (insertPos > (int)displayIndices.size()) 
+                        insertPos = (int)displayIndices.size();
+                    displayIndices.insert(displayIndices.begin() + insertPos, -1);
+                    int line = (yPos - 2) / ITEM_HEIGHT;
+                    int newTarget = state.dragTarget;
+                    if (yPos < 2) {
+                        newTarget = 0;
+                    } 
+                    else if (yPos >= 2 + visibleItems * ITEM_HEIGHT) {
+                        newTarget = total;
+                    } 
+                    else {
+                        int idx = scrollPos + line;
+                        if (idx >= 0 && idx < (int)displayIndices.size()) {
+                            int elem = displayIndices[idx];
+                            int midY = 2 + line * ITEM_HEIGHT + ITEM_HEIGHT / 2;
+                            if (elem == -1) {
+                                newTarget = state.dragTarget;
+                            } else {
+                                if (yPos < midY) {
+                                    newTarget = idx;
+                                } else {
+                                    newTarget = idx + 1;
+                                }
+                            }
+                        } 
+                        else {
+                            newTarget = total;
+                        }
+                    }
+                    if (newTarget < 0) 
+                        newTarget = 0;
+                    if (newTarget > total) 
+                        newTarget = total;
+                    if (newTarget != state.dragTarget) {
+                        state.dragTarget = newTarget;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    }
+                }
             }
             break;
         }
         case WM_MOUSELEAVE: {
-            if (state.hoverIndex != -1) {
+            if (state.hoverIndex != -1 && !state.dragging) {
                 state.hoverIndex = -1;
                 InvalidateRect(hwnd, NULL, TRUE);
             }
             break;
         }
-        case WM_SETCURSOR:
-            SetCursor(LoadCursor(NULL, IDC_ARROW));
-            return TRUE;
-        case WM_SETFOCUS:
-            InvalidateRect(hwnd, NULL, TRUE);
-            return 0;
         case WM_LBUTTONDOWN: {
             SetFocus(hwnd);
             int yPos = GET_Y_LPARAM(lParam);
@@ -1243,12 +1351,61 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             int itemIndex = startIdx + (yPos - 2) / ITEM_HEIGHT;
             int itemCount = (listType == ID_IMAGE_LIST) ? (int)g_imageFiles.size() : (int)g_monitors.size();
             if (itemIndex >= 0 && itemIndex < itemCount && itemIndex >= startIdx && itemIndex < startIdx + visibleItems) {
-                if (listType == ID_IMAGE_LIST) 
+                if (listType == ID_IMAGE_LIST) {
+                    state.dragSource = itemIndex;
+                    state.dragTarget = itemIndex;
+                    state.dragPending = true;
+                    state.dragging = false;
+                    state.dragStart = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                    SetCapture(hwnd);
                     g_imageListSelected = itemIndex;
+                } 
                 else g_monitorListSelected = itemIndex;
                 InvalidateRect(hwnd, NULL, TRUE);
             }
             return 0;
+        }
+        case WM_LBUTTONUP: {
+            if (listType == ID_IMAGE_LIST) {
+                if (state.dragging) {
+                    if (state.dragSource != -1 && state.dragTarget != -1 && state.dragSource != state.dragTarget) {
+                        ImageFile item = g_imageFiles[state.dragSource];
+                        g_imageFiles.erase(g_imageFiles.begin() + state.dragSource);
+                        g_imageFiles.insert(g_imageFiles.begin() + state.dragTarget, item);
+                        if (g_currentImageIndex == state.dragSource)
+                            g_currentImageIndex = state.dragTarget;
+                        else if (g_currentImageIndex > state.dragSource && g_currentImageIndex <= state.dragTarget)
+                            g_currentImageIndex--;
+                        else if (g_currentImageIndex < state.dragSource && g_currentImageIndex >= state.dragTarget)
+                            g_currentImageIndex++;
+
+                        g_imageListSelected = state.dragTarget;
+                        g_settingsChanged = true;
+                    }
+                    state.dragging = false;
+                    state.dragPending = false;
+                    state.dragSource = -1;
+                    state.dragTarget = -1;
+                    ReleaseCapture();
+                    InvalidateRect(hwnd, NULL, TRUE);
+                } 
+                else if (state.dragPending) {
+                    state.dragPending = false;
+                    state.dragSource = -1;
+                    ReleaseCapture();
+                }
+            }
+            return 0;
+        }
+        case WM_CAPTURECHANGED: {
+            if (listType == ID_IMAGE_LIST) {
+                state.dragging = false;
+                state.dragPending = false;
+                state.dragSource = -1;
+                state.dragTarget = -1;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
         }
         case WM_LBUTTONDBLCLK: {
             int yPos = GET_Y_LPARAM(lParam);
@@ -1273,7 +1430,7 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                         RenderOverlay();
                         g_currentMonitor = g_selectedMonitor;
                     }
-                    if (g_currentImageIndex != -1) 
+                    if (g_currentImageIndex != -1)
                         SaveCurrentImageSettings();
                     g_settingsChanged = true;
                 }
@@ -1306,7 +1463,8 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             int& scrollPos = (listType == ID_IMAGE_LIST) ? g_imageListScrollPos : g_monitorListScrollPos;
             int maxItems = (listType == ID_IMAGE_LIST) ? (int)g_imageFiles.size() : (int)g_monitors.size();
             int visibleItems = (listType == ID_IMAGE_LIST) ? VISIBLE_ITEMS_IMAGES : VISIBLE_ITEMS_MONITORS;
-            if (delta > 0) scrollPos = std::max(0, scrollPos - 3);
+            if (delta > 0)
+                scrollPos = std::max(0, scrollPos - 3);
             else scrollPos = std::min(std::max(0, maxItems - visibleItems), scrollPos + 3);
             InvalidateRect(hwnd, NULL, TRUE);
             return 0;
@@ -1320,6 +1478,12 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         }
         case WM_ERASEBKGND:
             return 1;
+        case WM_SETFOCUS:
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
+        case WM_SETCURSOR:
+            SetCursor(LoadCursor(NULL, IDC_ARROW));
+            return TRUE;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
@@ -2661,7 +2825,8 @@ void ApplyTheme() {
         g_hEditHoverBrush.reset(CreateSolidBrush(RGB(50,50,50)));
         if (g_hThemeButton) 
             SetWindowText(g_hThemeButton, L"Light");
-    } else {
+    } 
+    else {
         g_textColor = RGB(40,40,40);
         g_buttonTextColor = RGB(40,40,40);
         g_borderColor = RGB(180,180,180);
@@ -2900,12 +3065,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_hTabButton2 = CreateWindowW(L"BUTTON", L"Location && Size", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 99, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON2, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hTabButton3 = CreateWindowW(L"BUTTON", L"Hotkeys", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 198, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON3, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hImageList = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 7, 47, 280, VISIBLE_ITEMS_IMAGES*ITEM_HEIGHT+2, hwnd, (HMENU)ID_IMAGE_LIST, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_listBoxStates[g_hImageList].hoverIndex = -1;
+            g_listBoxStates[g_hImageList] = {-1, -1, -1, false, false, {0,0}};
             g_hBrowseButton = CreateWindowW(L"BUTTON", L"Browse Image", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 7, 196, 280, 30, hwnd, (HMENU)ID_BROWSE_BUTTON, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hHideOverlayCheckbox = CreateWindowW(L"BUTTON", L" Hide Overlay", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 7, 249, 90, 20, hwnd, (HMENU)ID_HIDE_OVERLAY_CHECKBOX, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hThemeButton = CreateWindowW(L"BUTTON", L"Dark", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 237, 249, 50, 20, hwnd, (HMENU)ID_THEME_BUTTON, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hMonitorList = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | SS_OWNERDRAW, 7, 47, 280, VISIBLE_ITEMS_MONITORS*ITEM_HEIGHT+2, hwnd, (HMENU)ID_MONITOR_LIST, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_listBoxStates[g_hMonitorList].hoverIndex = -1;
+            g_listBoxStates[g_hMonitorList] = {-1, -1, -1, false, false, {0,0}};
             g_hOffsetXDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 25, 121, 50, 20, hwnd, (HMENU)ID_OFFSET_X_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hOffsetYDisplay = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 25, 144, 50, 20, hwnd, (HMENU)ID_OFFSET_Y_DISPLAY, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hSizeSlider = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 7, 188, 280, 20, hwnd, (HMENU)ID_SIZE_SLIDER, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
