@@ -887,7 +887,7 @@ void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstrin
     DrawText(hdc, text.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hOldFont);
 }
-void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type, int hoverIndex) {
+void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
     RECT rc;
     GetClientRect(hwnd, &rc);
     FillRect(hdc, &rc, g_hListBoxBackgroundBrush.get());
@@ -901,13 +901,14 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type, int hoverIndex) {
     SetTextColor(hdc, g_textColor);
     SetBkMode(hdc, TRANSPARENT);
     HFONT hOldFont = (HFONT)SelectObject(hdc, g_hTabFont);
-    if (type == ID_IMAGE_LIST) {
+    if (listType == ID_IMAGE_LIST) {
         int total = (int)g_imageFiles.size();
         int startIdx = g_imageListScrollPos;
         int visibleItems = VISIBLE_ITEMS_IMAGES;
         ListBoxState& state = g_listBoxStates[hwnd];
         if (state.dragging && state.dragSource != -1) {
             std::vector<int> displayIndices;
+            displayIndices.reserve(total);
             for (int i = 0; i < total; ++i)
                 if (i != state.dragSource)
                     displayIndices.push_back(i);
@@ -925,22 +926,59 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type, int hoverIndex) {
                 RECT itemRect = {rc.left + 1, rc.top + 1 + (v - startIdx) * ITEM_HEIGHT, rc.right - 1, rc.top + 1 + (v - startIdx + 1) * ITEM_HEIGHT};
                 int realIdx = displayIndices[v];
                 if (realIdx == -1) {
-                    FillRect(hdc, &itemRect, g_hListBoxBackgroundBrush.get());
-                    HPEN hBorderPen = CreatePen(PS_DOT, 1, g_darkTheme ? RGB(150,150,150) : RGB(100,100,100));
-                    HPEN hOldPen = (HPEN)SelectObject(hdc, hBorderPen);
-                    HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
-                    Rectangle(hdc, itemRect.left, itemRect.top, itemRect.right, itemRect.bottom);
-                    SelectObject(hdc, hOldBrush);
-                    SelectObject(hdc, hOldPen);
-                    DeleteObject(hBorderPen);
+                    FillRect(hdc, &itemRect, g_hListBoxSelectedBrush.get());
+                    RECT textRect = itemRect;
+                    textRect.left += 2;
+                    std::wstring dragText = std::to_wstring(v + 1) + L". " + g_imageFiles[state.dragSource].filename;
+                    DrawText(hdc, dragText.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                 } 
                 else {
-                    HBRUSH bgBrush = (realIdx == g_imageListSelected) ? g_hListBoxSelectedBrush.get() : g_hListBoxBackgroundBrush.get();
+                    HBRUSH bgBrush = g_hListBoxBackgroundBrush.get();
+                    if (realIdx == g_imageListSelected)
+                        bgBrush = g_hListBoxSelectedBrush.get();
+                    else if (realIdx == state.hoverIndex && !state.dragging)
+                        bgBrush = g_hListBoxHoverBrush.get();
                     FillRect(hdc, &itemRect, bgBrush);
                     RECT textRect = itemRect;
                     textRect.left += 2;
-                    std::wstring displayText = std::to_wstring(realIdx + 1) + L". " + g_imageFiles[realIdx].filename;
+                    std::wstring displayText = std::to_wstring(v + 1) + L". " + g_imageFiles[realIdx].filename;
                     DrawText(hdc, displayText.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                }
+            }
+            if (g_currentImageIndex != -1) {
+                int targetRealIdx = g_currentImageIndex;
+                int targetV = -1;
+                for (int v = 0; v < (int)displayIndices.size(); ++v) {
+                    if (v < startIdx) 
+                        continue;
+                    if (v >= startIdx + visibleItems) 
+                        break;
+                    if (displayIndices[v] == targetRealIdx) {
+                        targetV = v;
+                        break;
+                    }
+                }
+                if (targetV == -1 && targetRealIdx == state.dragSource) {
+                    for (int v = 0; v < (int)displayIndices.size(); ++v) {
+                        if (v < startIdx) 
+                            continue;
+                        if (v >= startIdx + visibleItems) 
+                            break;
+                        if (displayIndices[v] == -1) {
+                            targetV = v;
+                            break;
+                        }
+                    }
+                }
+                if (targetV != -1) {
+                    RECT itemRect = {rc.left + 1, rc.top + 1 + (targetV - startIdx) * ITEM_HEIGHT, rc.right - 1, rc.top + 1 + (targetV - startIdx + 1) * ITEM_HEIGHT};
+                    HPEN hDashPen = CreatePen(PS_DOT, 1, g_darkTheme ? RGB(150,150,150) : RGB(100,100,100));
+                    HPEN hOldPen2 = (HPEN)SelectObject(hdc, hDashPen);
+                    HBRUSH hOldBrush2 = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                    Rectangle(hdc, itemRect.left, itemRect.top, itemRect.right, itemRect.bottom);
+                    SelectObject(hdc, hOldBrush2);
+                    SelectObject(hdc, hOldPen2);
+                    DeleteObject(hDashPen);
                 }
             }
         } 
@@ -953,36 +991,61 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int type, int hoverIndex) {
                     bgBrush = g_hListBoxSelectedBrush.get();
                 else if (i == state.hoverIndex)
                     bgBrush = g_hListBoxHoverBrush.get();
-                else bgBrush = g_hListBoxBackgroundBrush.get();
+                else
+                    bgBrush = g_hListBoxBackgroundBrush.get();
                 FillRect(hdc, &itemRect, bgBrush);
                 RECT textRect = itemRect;
                 textRect.left += 2;
                 std::wstring displayText = std::to_wstring(i + 1) + L". " + g_imageFiles[i].filename;
                 DrawText(hdc, displayText.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             }
+            if (g_currentImageIndex >= startIdx && g_currentImageIndex < endIdx) {
+                int i = g_currentImageIndex;
+                RECT itemRect = {rc.left + 1, rc.top + 1 + (i - startIdx) * ITEM_HEIGHT, rc.right - 1, rc.top + 1 + (i - startIdx + 1) * ITEM_HEIGHT};
+                HPEN hDashPen = CreatePen(PS_DOT, 1, g_darkTheme ? RGB(150,150,150) : RGB(100,100,100));
+                HPEN hOldPen2 = (HPEN)SelectObject(hdc, hDashPen);
+                HBRUSH hOldBrush2 = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                Rectangle(hdc, itemRect.left, itemRect.top, itemRect.right, itemRect.bottom);
+                SelectObject(hdc, hOldBrush2);
+                SelectObject(hdc, hOldPen2);
+                DeleteObject(hDashPen);
+            }
         }
     }
-    else if (type == ID_MONITOR_LIST) {
+    else if (listType == ID_MONITOR_LIST) {
         int startIdx = g_monitorListScrollPos;
         int endIdx = std::min(startIdx + VISIBLE_ITEMS_MONITORS, (int)g_monitors.size());
+        ListBoxState& state = g_listBoxStates[hwnd];
         for (int i = startIdx; i < endIdx; i++) {
             RECT itemRect = {rc.left+1, rc.top+1 + (i-startIdx)*ITEM_HEIGHT, rc.right-1, rc.top+1 + (i-startIdx+1)*ITEM_HEIGHT};
             HBRUSH bgBrush;
-            if (i == g_monitorListSelected) 
+            if (i == g_monitorListSelected)
                 bgBrush = g_hListBoxSelectedBrush.get();
-            else if (i == hoverIndex) 
+            else if (i == state.hoverIndex)
                 bgBrush = g_hListBoxHoverBrush.get();
-            else bgBrush = g_hListBoxBackgroundBrush.get();
+            else
+                bgBrush = g_hListBoxBackgroundBrush.get();
             FillRect(hdc, &itemRect, bgBrush);
             std::wstring displayText = std::to_wstring(i+1) + L". ";
-            if (!g_monitors[i].friendlyName.empty()) 
+            if (!g_monitors[i].friendlyName.empty())
                 displayText += g_monitors[i].friendlyName + L" (";
             displayText += g_monitors[i].name;
-            if (!g_monitors[i].friendlyName.empty()) 
+            if (!g_monitors[i].friendlyName.empty())
                 displayText += L")";
             RECT textRect = itemRect;
             textRect.left += 2;
             DrawText(hdc, displayText.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
+        if (g_selectedMonitor >= startIdx && g_selectedMonitor < endIdx) {
+            int i = g_selectedMonitor;
+            RECT itemRect = {rc.left + 1, rc.top + 1 + (i - startIdx) * ITEM_HEIGHT, rc.right - 1, rc.top + 1 + (i - startIdx + 1) * ITEM_HEIGHT};
+            HPEN hDashPen = CreatePen(PS_DOT, 1, g_darkTheme ? RGB(150,150,150) : RGB(100,100,100));
+            HPEN hOldPen2 = (HPEN)SelectObject(hdc, hDashPen);
+            HBRUSH hOldBrush2 = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            Rectangle(hdc, itemRect.left, itemRect.top, itemRect.right, itemRect.bottom);
+            SelectObject(hdc, hOldBrush2);
+            SelectObject(hdc, hOldPen2);
+            DeleteObject(hDashPen);
         }
     }
     SelectObject(hdc, hOldFont);
@@ -1301,21 +1364,23 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     int newTarget = state.dragTarget;
                     if (yPos < 2) {
                         newTarget = 0;
-                    } 
+                    }
                     else if (yPos >= 2 + visibleItems * ITEM_HEIGHT) {
                         newTarget = total;
-                    } 
+                    }
                     else {
                         int idx = scrollPos + line;
                         if (idx >= 0 && idx < (int)displayIndices.size()) {
                             int elem = displayIndices[idx];
                             int midY = 2 + line * ITEM_HEIGHT + ITEM_HEIGHT / 2;
                             if (elem == -1) {
-                                newTarget = state.dragTarget;
-                            } else {
+                                newTarget = idx;
+                            } 
+                            else {
                                 if (yPos < midY) {
                                     newTarget = idx;
-                                } else {
+                                } 
+                                else {
                                     newTarget = idx + 1;
                                 }
                             }
@@ -1368,19 +1433,29 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         case WM_LBUTTONUP: {
             if (listType == ID_IMAGE_LIST) {
                 if (state.dragging) {
-                    if (state.dragSource != -1 && state.dragTarget != -1 && state.dragSource != state.dragTarget) {
-                        ImageFile item = g_imageFiles[state.dragSource];
-                        g_imageFiles.erase(g_imageFiles.begin() + state.dragSource);
-                        g_imageFiles.insert(g_imageFiles.begin() + state.dragTarget, item);
-                        if (g_currentImageIndex == state.dragSource)
-                            g_currentImageIndex = state.dragTarget;
-                        else if (g_currentImageIndex > state.dragSource && g_currentImageIndex <= state.dragTarget)
-                            g_currentImageIndex--;
-                        else if (g_currentImageIndex < state.dragSource && g_currentImageIndex >= state.dragTarget)
-                            g_currentImageIndex++;
-
-                        g_imageListSelected = state.dragTarget;
-                        g_settingsChanged = true;
+                    if (state.dragSource != -1 && state.dragTarget != -1) {
+                        if (state.dragSource != state.dragTarget) {
+                            int src = state.dragSource;
+                            int dst = state.dragTarget;
+                            int oldSize = (int)g_imageFiles.size();
+                            ImageFile item = g_imageFiles[src];
+                            g_imageFiles.erase(g_imageFiles.begin() + src);
+                            if (dst == oldSize)
+                                g_imageFiles.push_back(item);
+                            else
+                                g_imageFiles.insert(g_imageFiles.begin() + dst, item);
+                            int actualPos = (dst == oldSize) ? oldSize - 1 : dst;
+                            if (g_currentImageIndex == src)
+                                g_currentImageIndex = actualPos;
+                            else if (g_currentImageIndex > src && g_currentImageIndex <= dst)
+                                g_currentImageIndex--;
+                            else if (g_currentImageIndex < src && g_currentImageIndex >= dst)
+                                g_currentImageIndex++;
+                            g_imageListSelected = actualPos;
+                            g_settingsChanged = true;
+                        } 
+                        else
+                            g_imageListSelected = state.dragSource;
                     }
                     state.dragging = false;
                     state.dragPending = false;
@@ -2666,28 +2741,29 @@ void CycleImageSelection() {
     if (g_imageFiles.empty()) 
         return;
     int count = (int)g_imageFiles.size();
-    if (g_imageListSelected == -1)
-        g_imageListSelected = g_reverseDirection ? count - 1 : 0;
+    if (g_currentImageIndex == -1) {
+        g_currentImageIndex = g_reverseDirection ? count - 1 : 0;
+    } 
     else {
         if (g_reverseDirection) {
-            g_imageListSelected--;
-            if (g_imageListSelected < 0) 
-                g_imageListSelected = count - 1;
+            g_currentImageIndex--;
+            if (g_currentImageIndex < 0) 
+                g_currentImageIndex = count - 1;
         } 
         else {
-            g_imageListSelected++;
-            if (g_imageListSelected >= count) 
-                g_imageListSelected = 0;
+            g_currentImageIndex++;
+            if (g_currentImageIndex >= count) 
+                g_currentImageIndex = 0;
         }
     }
+    g_imageListSelected = g_currentImageIndex;
     int visibleItems = VISIBLE_ITEMS_IMAGES;
-    if (g_imageListSelected < g_imageListScrollPos) 
-        g_imageListScrollPos = g_imageListSelected;
-    else if (g_imageListSelected >= g_imageListScrollPos + visibleItems) 
-        g_imageListScrollPos = g_imageListSelected - visibleItems + 1;
+    if (g_currentImageIndex < g_imageListScrollPos)
+        g_imageListScrollPos = g_currentImageIndex;
+    else if (g_currentImageIndex >= g_imageListScrollPos + visibleItems)
+        g_imageListScrollPos = g_currentImageIndex - visibleItems + 1;
     if (g_hImageList) 
         InvalidateRect(g_hImageList, NULL, TRUE);
-    g_currentImageIndex = g_imageListSelected;
     SetCurrentImageSettings(g_currentImageIndex);
     CreateOverlayWindow(g_imageFiles[g_currentImageIndex].path, true);
 }
