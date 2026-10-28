@@ -19,37 +19,43 @@
 #include <unordered_map>
 #define GET_X_LPARAM(lParam) ((int)(short)LOWORD(lParam))
 #define GET_Y_LPARAM(lParam) ((int)(short)HIWORD(lParam))
-#define IDI_MYICON 101
+#define IDI_MYICON 1000
 #define ID_TRAY_APP_ICON 1001
 #define ID_TRAY_EXIT 1002
 #define ID_TRAY_SHOW 1003
 #define ID_TRAY_HIDE_OVERLAY 1004
 #define ID_TRAY_NEXT_IMAGE 1005
 #define WM_TRAYICON (WM_USER + 1)
-#define ID_IMAGE_LIST 2002
-#define ID_BROWSE_BUTTON 2003
-#define ID_CONTEXT_OPEN 2004
-#define ID_CONTEXT_REMOVE 2005
-#define ID_HIDE_OVERLAY_CHECKBOX 2006
-#define ID_MONITOR_LIST 2007
-#define ID_SIZE_SLIDER 2010
-#define ID_THEME_BUTTON 2014
-#define ID_TAB_BUTTON1 2016
-#define ID_TAB_BUTTON2 2017
-#define ID_TAB_BUTTON3 2018
-#define ID_OFFSET_X_DISPLAY 2020
-#define ID_OFFSET_Y_DISPLAY 2021
-#define ID_SIZE_DISPLAY 2022
-#define ID_HOTKEY_TOGGLE_DISPLAY 2023
-#define ID_HOTKEY_QUIT_DISPLAY 2024
-#define ID_HOTKEY_SETTINGS_DISPLAY 2025
-#define ID_RESET_TOGGLE 2026
-#define ID_RESET_SETTINGS 2027
-#define ID_RESET_QUIT 2028
-#define ID_ANIMATION_TIMER 2029
-#define ID_HOTKEY_CYCLE_DISPLAY 2030
-#define ID_REVERSE_DIRECTION_CHECKBOX 2031
-#define ID_RESET_CYCLE 2032
+#define ID_IMAGE_LIST 1006
+#define ID_BROWSE_BUTTON 1007
+#define ID_CONTEXT_OPEN 1008
+#define ID_CONTEXT_REMOVE 1009
+#define ID_HIDE_OVERLAY_CHECKBOX 1010
+#define ID_MONITOR_LIST 1011
+#define ID_SIZE_SLIDER 1012
+#define ID_THEME_BUTTON 1013
+#define ID_TAB_BUTTON1 1014
+#define ID_TAB_BUTTON2 1015
+#define ID_TAB_BUTTON3 1016
+#define ID_OFFSET_X_DISPLAY 1017
+#define ID_OFFSET_Y_DISPLAY 1018
+#define ID_SIZE_DISPLAY 1019
+#define ID_HOTKEY_TOGGLE_DISPLAY 1020
+#define ID_HOTKEY_QUIT_DISPLAY 1021
+#define ID_HOTKEY_SETTINGS_DISPLAY 1022
+#define ID_RESET_TOGGLE 1023
+#define ID_RESET_SETTINGS 1024
+#define ID_RESET_QUIT 1025
+#define ID_ANIMATION_TIMER 1026
+#define ID_HOTKEY_CYCLE_DISPLAY 1027
+#define ID_REVERSE_DIRECTION_CHECKBOX 1028
+#define ID_RESET_CYCLE 1029
+#define ID_SPIN_X_UP 1030
+#define ID_SPIN_X_DOWN 1031
+#define ID_SPIN_Y_UP 1032
+#define ID_SPIN_Y_DOWN 1033
+#define ID_SPIN_SIZE_UP 1034
+#define ID_SPIN_SIZE_DOWN 1035
 #define WM_UPDATE_MONITOR_NAMES (WM_APP + 1)
 #define WM_SHOW_AND_MESSAGE (WM_APP + 2)
 using namespace Gdiplus;
@@ -170,12 +176,14 @@ public:
     ~AnimatedGIF() {
         StopAnimation();
         Cleanup();
-        if (m_pFactory) m_pFactory->Release();
+        if (m_pFactory) 
+            m_pFactory->Release();
     }
     bool Load(const std::wstring& filename) {
         Cleanup();
         HRESULT hr = m_pFactory->CreateDecoderFromFilename(filename.c_str(), NULL, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &m_pDecoder);
-        if (FAILED(hr)) return false;
+        if (FAILED(hr)) 
+            return false;
         UINT frameCount = 0;
         m_pDecoder->GetFrameCount(&frameCount);
         if (frameCount == 0) {
@@ -239,7 +247,8 @@ public:
                 if (SUCCEEDED(hr)) {
                     UINT frameW, frameH;
                     pConverter->GetSize(&frameW, &frameH);
-                    if (frameW > 0 && frameH > 0) frameBitmap = CreateBitmapFromConverter(pConverter, frameW, frameH);
+                    if (frameW > 0 && frameH > 0) 
+                        frameBitmap = CreateBitmapFromConverter(pConverter, frameW, frameH);
                 }
                 pConverter->Release();
                 pConverter = NULL;
@@ -433,6 +442,13 @@ HFONT g_hTabFont = NULL;
 HFONT g_hMenuFont = NULL;
 HICON g_hMainIcon = NULL;
 HWND g_hPopupWindow = NULL;
+HWND g_hMenuOwner = NULL;
+HWND g_hSpinXUp = NULL;
+HWND g_hSpinXDown = NULL;
+HWND g_hSpinYUp = NULL;
+HWND g_hSpinYDown = NULL;
+HWND g_hSpinSizeUp = NULL;
+HWND g_hSpinSizeDown = NULL;
 UniqueHBrush g_hBackgroundBrush(nullptr);
 UniqueHBrush g_hButtonBrush(nullptr);
 UniqueHBrush g_hButtonPressedBrush(nullptr);
@@ -538,6 +554,12 @@ WNDPROC g_oldResetCycleProc = NULL;
 WNDPROC g_oldResetQuitProc = NULL;
 WNDPROC g_oldHideOverlayCheckboxProc = NULL;
 WNDPROC g_oldReverseDirectionCheckboxProc = NULL;
+WNDPROC g_oldSpinXUpProc = NULL;
+WNDPROC g_oldSpinXDownProc = NULL;
+WNDPROC g_oldSpinYUpProc = NULL;
+WNDPROC g_oldSpinYDownProc = NULL;
+WNDPROC g_oldSpinSizeUpProc = NULL;
+WNDPROC g_oldSpinSizeDownProc = NULL;
 LRESULT CALLBACK OverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 std::wstring GetIniFilePath() {
     wchar_t exePath[MAX_PATH] = {0};
@@ -742,6 +764,13 @@ std::wstring ExtractModelFromDeviceID(const std::wstring& deviceID) {
         return L"";
     return deviceID.substr(start, end - start);
 }
+LRESULT CALLBACK MenuOwnerProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_DRAWITEM || msg == WM_MEASUREITEM)
+        return SendMessage(g_hwnd, msg, wParam, lParam);
+    if (msg == WM_COMMAND)
+        return SendMessage(g_hwnd, msg, wParam, lParam);
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
 void LoadMonitorNamesThread() {
     if (g_programExiting) 
         return;
@@ -768,7 +797,9 @@ void LoadMonitorNamesThread() {
     }
     if (g_programExiting) 
         return;
-    PostMessage(g_hwnd, WM_UPDATE_MONITOR_NAMES, 0, 0);
+    if (!g_programExiting && g_hwnd && IsWindow(g_hwnd)) {
+        PostMessage(g_hwnd, WM_UPDATE_MONITOR_NAMES, 0, 0);
+    }
     g_monitorNamesThreadRunning = false;
 }
 void ForceForegroundWindow(HWND hwnd) {
@@ -849,6 +880,12 @@ void ActivateNextMessageBox(HWND hCurrent) {
             }
             return;
         }
+    }
+    if (!g_programExiting && IsWindow(g_hwnd)) {
+        EnableWindow(g_hwnd, TRUE);
+        ForceForegroundWindow(g_hwnd);
+        InvalidateRect(g_hwnd, NULL, TRUE);
+        UpdateWindow(g_hwnd);
     }
 }
 void UpdateOffsetBoundsDisplay() {
@@ -959,7 +996,7 @@ void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstrin
     RECT checkboxRect = {checkboxX, checkboxY, checkboxX + checkboxSize, checkboxY + checkboxSize};
     HBRUSH hCheckBrush = isHovered ? g_hCheckboxHoverBrush.get() : g_hCheckboxBrush.get();
     FillRect(hdc, &checkboxRect, hCheckBrush);
-    HPEN hBorderPen = CreatePen(PS_SOLID, 1, g_darkTheme ? RGB(100,100,100) : RGB(150,150,150));
+    HPEN hBorderPen = CreatePen(PS_SOLID, 1, g_buttonBorderColor);
     HPEN hOldPen = (HPEN)SelectObject(hdc, hBorderPen);
     HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
     Rectangle(hdc, checkboxRect.left, checkboxRect.top, checkboxRect.right, checkboxRect.bottom);
@@ -1011,6 +1048,42 @@ std::wstring EllipsisText(HDC hdc, const std::wstring& text, int maxWidth) {
     }
     return text.substr(0, best) + L"...";
 }
+void DrawSpinButton(HDC hdc, RECT rc, bool up, bool pressed, bool hover) {
+    HBRUSH hBrush;
+    if (pressed) 
+        hBrush = g_hButtonPressedBrush.get();
+    else if (hover) 
+        hBrush = g_hButtonHoverBrush.get();
+    else hBrush = g_hButtonBrush.get();
+    FillRect(hdc, &rc, hBrush);
+    HPEN hBorderPen = CreatePen(PS_SOLID, 1, g_buttonBorderColor);
+    HPEN hOldPen = (HPEN)SelectObject(hdc, hBorderPen);
+    HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
+    SelectObject(hdc, hOldBrush);
+    SelectObject(hdc, hOldPen);
+    DeleteObject(hBorderPen);
+    int midX = (rc.left + rc.right) / 2;
+    int startY;
+    if (up)
+        startY = rc.top + 3;
+    else startY = rc.bottom - 4;
+    HBRUSH hArrowBrush = CreateSolidBrush(g_buttonTextColor);
+    HBRUSH hOldBrush2 = (HBRUSH)SelectObject(hdc, hArrowBrush);
+    for (int i = 0; i < 4; i++) {
+        int half = i;
+        int leftX = midX - half;
+        int rightX = midX + half;
+        int y;
+        if (up)
+            y = startY + i;
+        else y = startY - i;
+        RECT lineRect = {leftX, y, rightX + 1, y + 1};
+        FillRect(hdc, &lineRect, hArrowBrush);
+    }
+    SelectObject(hdc, hOldBrush2);
+    DeleteObject(hArrowBrush);
+}
 void DrawScrollIndicator(HDC hdc, RECT rc, int totalItems, int visibleItems, int scrollPos, bool darkTheme) {
     if (totalItems <= visibleItems) 
         return;
@@ -1039,7 +1112,7 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
     RECT rc;
     GetClientRect(hwnd, &rc);
     FillRect(hdc, &rc, g_hListBoxBackgroundBrush.get());
-    HPEN hBorderPen = CreatePen(PS_SOLID, 1, g_darkTheme ? RGB(80,80,80) : RGB(150,150,150));
+    HPEN hBorderPen = CreatePen(PS_SOLID, 1, g_buttonBorderColor);
     HPEN hOldPen = (HPEN)SelectObject(hdc, hBorderPen);
     HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
     Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
@@ -1199,9 +1272,8 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
             textRect.left += 2;
             SIZE textSize;
             GetTextExtentPoint32(hdc, displayText.c_str(), (int)displayText.length(), &textSize);
-            if (textSize.cx > availableWidth) {
+            if (textSize.cx > availableWidth)
                 displayText = EllipsisText(hdc, displayText, availableWidth);
-            }
             DrawText(hdc, displayText.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         }
         if (g_selectedMonitor >= startIdx && g_selectedMonitor < endIdx) {
@@ -1267,7 +1339,7 @@ void DrawOwnerDrawEdit(HDC hdc, HWND hwnd, EditField* field, bool darkTheme, boo
         FillRect(hdc, &selRect, g_hListBoxSelectedBrush.get());
         SelectObject(hdc, hOldFont);
     }
-    COLORREF borderColor = darkTheme ? RGB(80,80,80) : RGB(150,150,150);
+    COLORREF borderColor = g_buttonBorderColor;
     if (field->hasFocus) 
         borderColor = darkTheme ? RGB(255,255,255) : RGB(0,0,0);
     HPEN hBorderPen = CreatePen(PS_SOLID, 1, borderColor);
@@ -1415,11 +1487,17 @@ LRESULT HandleOwnerDrawButton(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
             HDC hdcMem = CreateCompatibleDC(hdc);
             HBITMAP hBitmap = CreateCompatibleBitmap(hdc, rc.right - rc.left, rc.bottom - rc.top);
             HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
-            wchar_t buffer[256];
-            GetWindowText(hwnd, buffer, 256);
-            bool isActiveTab = (buttonId == ID_TAB_BUTTON1 && g_activeTab == 1) || (buttonId == ID_TAB_BUTTON2 && g_activeTab == 2) || (buttonId == ID_TAB_BUTTON3 && g_activeTab == 3);
             ButtonState& state = g_buttonStates[hwnd];
-            DrawOwnerDrawButton(hdcMem, hwnd, state.pressed, buffer, isActiveTab, state.hover && !state.pressed && !isActiveTab);
+            if (buttonId == ID_SPIN_X_UP || buttonId == ID_SPIN_Y_UP || buttonId == ID_SPIN_SIZE_UP)
+                DrawSpinButton(hdcMem, rc, true, state.pressed, state.hover);
+            else if (buttonId == ID_SPIN_X_DOWN || buttonId == ID_SPIN_Y_DOWN || buttonId == ID_SPIN_SIZE_DOWN)
+                DrawSpinButton(hdcMem, rc, false, state.pressed, state.hover);
+            else {
+                wchar_t buffer[256];
+                GetWindowText(hwnd, buffer, 256);
+                bool isActiveTab = (buttonId == ID_TAB_BUTTON1 && g_activeTab == 1) || (buttonId == ID_TAB_BUTTON2 && g_activeTab == 2) || (buttonId == ID_TAB_BUTTON3 && g_activeTab == 3);
+                DrawOwnerDrawButton(hdcMem, hwnd, state.pressed, buffer, isActiveTab, state.hover && !state.pressed && !isActiveTab);
+            }
             BitBlt(hdc, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, hdcMem, 0, 0, SRCCOPY);
             SelectObject(hdcMem, hOldBitmap);
             DeleteObject(hBitmap);
@@ -1583,21 +1661,15 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                         if (idx >= 0 && idx < (int)displayIndices.size()) {
                             int elem = displayIndices[idx];
                             int midY = 2 + line * ITEM_HEIGHT + ITEM_HEIGHT / 2;
-                            if (elem == -1) {
+                            if (elem == -1)
                                 newTarget = idx;
-                            }
                             else {
-                                if (yPos < midY) {
+                                if (yPos < midY)
                                     newTarget = idx;
-                                }
-                                else {
-                                    newTarget = idx + 1;
-                                }
+                                else newTarget = idx + 1;
                             }
                         }
-                        else {
-                            newTarget = total;
-                        }
+                        else newTarget = total;
                     }
                     if (newTarget < 0) 
                         newTarget = 0;
@@ -2253,7 +2325,7 @@ LRESULT CALLBACK ImageListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                         height = 30;
                     POINT pt;
                     GetCursorPos(&pt);
-                    int x = pt.x + 10;
+                    int x = pt.x;
                     int y = pt.y + 20;
                     HMONITOR hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
                     MONITORINFO mi = {sizeof(mi)};
@@ -2505,6 +2577,24 @@ LRESULT CALLBACK HideOverlayCheckboxSubclassProc(HWND hwnd, UINT msg, WPARAM wPa
 }
 LRESULT CALLBACK ReverseDirectionCheckboxSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return HandleOwnerDrawCheckbox(hwnd, msg, wParam, lParam);
+}
+LRESULT CALLBACK SpinXUpSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_SPIN_X_UP);
+}
+LRESULT CALLBACK SpinXDownSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_SPIN_X_DOWN);
+}
+LRESULT CALLBACK SpinYUpSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_SPIN_Y_UP);
+}
+LRESULT CALLBACK SpinYDownSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_SPIN_Y_DOWN);
+}
+LRESULT CALLBACK SpinSizeUpSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_SPIN_SIZE_UP);
+}
+LRESULT CALLBACK SpinSizeDownSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return HandleOwnerDrawButton(hwnd, msg, wParam, lParam, ID_SPIN_SIZE_DOWN);
 }
 void AddImageToList(const std::wstring& filePath, bool saveToIni) {
     if (!IsSupportedImageFormat(filePath)) {
@@ -3053,7 +3143,6 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
         }
         return;
     }
-    SetCurrentImageSettings(imageIndex);
     bool destroyOldWindow = (g_currentOverlay != NULL && g_lastDisplayedImage != imagePath);
     if (destroyOldWindow) {
         if (g_animatedGIFShared) 
@@ -3079,8 +3168,46 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
     }
     if (isGif) {
         auto gif = std::make_shared<AnimatedGIF>();
-        if (!gif->Load(imagePath)) 
+        if (!gif->Load(imagePath)) {
+            if (!IsWindowVisible(g_hwnd) || IsIconic(g_hwnd)) {
+                ShowWindow(g_hwnd, SW_RESTORE);
+                SetWindowPos(g_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                ForceForegroundWindow(g_hwnd);
+            }
+            std::wstring msg = L"Failed to load image. The file may be corrupted or in an unsupported format. Remove this image from the list? Location && Size settings will be lost.";
+            int result = ShowOwnerDrawMessageBox(g_hwnd, msg, MB_YESNO);
+            if (result == IDYES) {
+                bool wasCurrent = (imageIndex == g_currentImageIndex);
+                RemoveImageFromList(imageIndex);
+                if (wasCurrent && g_lastSuccessfulImageIndex != -1 && g_lastSuccessfulImageIndex != imageIndex) {
+                    g_currentImageIndex = g_lastSuccessfulImageIndex;
+                    SetCurrentImageSettings(g_currentImageIndex);
+                    CreateOverlayWindow(g_currentImageIndex, true);
+                } 
+                else if (wasCurrent) {
+                    if (g_currentOverlay) {
+                        if (g_animatedGIFShared) 
+                            g_animatedGIFShared->StopAnimation();
+                        DestroyWindow(g_currentOverlay);
+                        g_currentOverlay = NULL;
+                        g_currentOverlayAtomic = nullptr;
+                        {
+                            std::lock_guard<std::mutex> lock(g_renderDataMutex);
+                            g_cachedBitmapShared.reset();
+                            g_animatedGIFShared.reset();
+                            g_originalImageWidth = 0;
+                            g_originalImageHeight = 0;
+                        }
+                        StopRenderThread();
+                    }
+                    g_currentImageIndex = -1;
+                    g_imageListSelected = -1;
+                    if (g_hImageList) 
+                        InvalidateRect(g_hImageList, NULL, TRUE);
+                }
+            }
             return;
+        }
         {
             std::lock_guard<std::mutex> lock(g_renderDataMutex);
             g_animatedGIFShared = gif;
@@ -3089,11 +3216,50 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
             g_originalImageHeight = gif->GetHeight();
             g_lastDisplayedImage = imagePath;
         }
+        SetCurrentImageSettings(imageIndex);
     } 
     else {
         auto bitmap = std::make_shared<Bitmap>(imagePath.c_str());
-        if (!bitmap || bitmap->GetLastStatus() != Ok) 
+        if (!bitmap || bitmap->GetLastStatus() != Ok) {
+            if (!IsWindowVisible(g_hwnd) || IsIconic(g_hwnd)) {
+                ShowWindow(g_hwnd, SW_RESTORE);
+                SetWindowPos(g_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                ForceForegroundWindow(g_hwnd);
+            }
+            std::wstring msg = L"Failed to load image. The file may be corrupted or in an unsupported format. Remove this image from the list? Location && Size settings will be lost.";
+            int result = ShowOwnerDrawMessageBox(g_hwnd, msg, MB_YESNO);
+            if (result == IDYES) {
+                bool wasCurrent = (imageIndex == g_currentImageIndex);
+                RemoveImageFromList(imageIndex);
+                if (wasCurrent && g_lastSuccessfulImageIndex != -1 && g_lastSuccessfulImageIndex != imageIndex) {
+                    g_currentImageIndex = g_lastSuccessfulImageIndex;
+                    SetCurrentImageSettings(g_currentImageIndex);
+                    CreateOverlayWindow(g_currentImageIndex, true);
+                } 
+                else if (wasCurrent) {
+                    if (g_currentOverlay) {
+                        if (g_animatedGIFShared) 
+                            g_animatedGIFShared->StopAnimation();
+                        DestroyWindow(g_currentOverlay);
+                        g_currentOverlay = NULL;
+                        g_currentOverlayAtomic = nullptr;
+                        {
+                            std::lock_guard<std::mutex> lock(g_renderDataMutex);
+                            g_cachedBitmapShared.reset();
+                            g_animatedGIFShared.reset();
+                            g_originalImageWidth = 0;
+                            g_originalImageHeight = 0;
+                        }
+                        StopRenderThread();
+                    }
+                    g_currentImageIndex = -1;
+                    g_imageListSelected = -1;
+                    if (g_hImageList) 
+                        InvalidateRect(g_hImageList, NULL, TRUE);
+                }
+            }
             return;
+        }
         {
             std::lock_guard<std::mutex> lock(g_renderDataMutex);
             g_cachedBitmapShared = bitmap;
@@ -3102,6 +3268,7 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
             g_originalImageHeight = bitmap->GetHeight();
             g_lastDisplayedImage = imagePath;
         }
+        SetCurrentImageSettings(imageIndex);
     }
     int windowWidth = 2 * g_originalImageWidth;
     int windowHeight = 2 * g_originalImageHeight;
@@ -3355,9 +3522,15 @@ LRESULT HandleHotkey(WPARAM wParam) {
         case 3: 
             CycleImageSelection(); 
             return 0;
-        case 4: 
+        case 4:
+            g_programExiting = true;
+            {
+                HWND hMsgBox = NULL;
+                while ((hMsgBox = FindWindowEx(NULL, hMsgBox, L"OwnerDrawMessageBox", NULL)) != NULL)
+                    PostMessage(hMsgBox, WM_CLOSE, 0, 0);
+            }
             if (g_hwnd) 
-                PostMessage(g_hwnd, WM_DESTROY, 0, 0); 
+                DestroyWindow(g_hwnd);
             return 0;
     }
     return 0;
@@ -3457,7 +3630,7 @@ void ApplyTheme() {
         g_textColor = RGB(40,40,40);
         g_buttonTextColor = RGB(40,40,40);
         g_borderColor = RGB(180,180,180);
-        g_buttonBorderColor = RGB(200,200,200);
+        g_buttonBorderColor = RGB(150,150,150);
         g_menuBackgroundColor = RGB(240,240,240);
         g_menuTextColor = RGB(40,40,40);
         g_menuSelectedColor = RGB(210,210,210);
@@ -3608,7 +3781,7 @@ LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LP
             textRect.left += 10;
             textRect.right -= 10;
             textRect.top += 5;
-            textRect.bottom = textRect.top + 40;
+            textRect.bottom = cr.bottom - 30;
             MessageBoxData* data = (MessageBoxData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
             if (data)
                 DrawText(hdcMem, data->message.c_str(), -1, &textRect, DT_LEFT | DT_WORDBREAK);
@@ -3639,7 +3812,7 @@ LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LP
             if (remaining > 0) {
                 ActivateNextMessageBox(hwnd);
             } 
-            else if (IsWindow(g_hwnd)) {
+            else if (!g_programExiting && IsWindow(g_hwnd)) {
                 EnableWindow(g_hwnd, TRUE);
                 ForceForegroundWindow(g_hwnd);
                 InvalidateRect(g_hwnd, NULL, TRUE);
@@ -3733,6 +3906,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             if (!g_hTabFont) 
                 g_hTabFont = CreateFont(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_OUTLINE_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,VARIABLE_PITCH,L"Segoe UI");
             g_hMenuFont = CreateFont(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_OUTLINE_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,VARIABLE_PITCH,L"Segoe UI");
+            g_hMenuOwner = CreateWindow(L"MenuOwnerClass", L"", WS_POPUP, 0, 0, 0, 0, NULL, NULL, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hTabButton1 = CreateWindowW(L"BUTTON", L"Select Images", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 0, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON1, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hTabButton2 = CreateWindowW(L"BUTTON", L"Location && Size", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 99, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON2, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hTabButton3 = CreateWindowW(L"BUTTON", L"Hotkeys", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 198, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON3, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
@@ -3756,6 +3930,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_hResetCycle = CreateWindowW(L"BUTTON", L"Reset", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 75, 131, 60, 20, hwnd, (HMENU)ID_RESET_CYCLE, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hReverseDirectionCheckbox = CreateWindowW(L"BUTTON", L" Reverse Direction", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 7, 151, 115, 20, hwnd, (HMENU)ID_REVERSE_DIRECTION_CHECKBOX, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hResetQuit = CreateWindowW(L"BUTTON", L"Reset", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 75, 186, 60, 20, hwnd, (HMENU)ID_RESET_QUIT, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hSpinXUp = CreateWindow(L"BUTTON", L"", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 75, 121, 17, 10, hwnd, (HMENU)ID_SPIN_X_UP, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hSpinXDown = CreateWindow(L"BUTTON", L"", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 75, 131, 17, 10, hwnd, (HMENU)ID_SPIN_X_DOWN, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hSpinYUp = CreateWindow(L"BUTTON", L"", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 75, 144, 17, 10, hwnd, (HMENU)ID_SPIN_Y_UP, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hSpinYDown = CreateWindow(L"BUTTON", L"", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 75, 154, 17, 10, hwnd, (HMENU)ID_SPIN_Y_DOWN, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hSpinSizeUp = CreateWindow(L"BUTTON", L"", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 57, 210, 17, 10, hwnd, (HMENU)ID_SPIN_SIZE_UP, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hSpinSizeDown = CreateWindow(L"BUTTON", L"", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 57, 220, 17, 10, hwnd, (HMENU)ID_SPIN_SIZE_DOWN, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_offsetXField.hwnd = g_hOffsetXDisplay;
             g_offsetYField.hwnd = g_hOffsetYDisplay;
             g_sizeField.hwnd = g_hSizeDisplay;
@@ -3783,6 +3963,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_oldResetQuitProc = (WNDPROC)SetWindowLongPtr(g_hResetQuit, GWLP_WNDPROC, (LONG_PTR)ResetQuitSubclassProc);
             g_oldHideOverlayCheckboxProc = (WNDPROC)SetWindowLongPtr(g_hHideOverlayCheckbox, GWLP_WNDPROC, (LONG_PTR)HideOverlayCheckboxSubclassProc);
             g_oldReverseDirectionCheckboxProc = (WNDPROC)SetWindowLongPtr(g_hReverseDirectionCheckbox, GWLP_WNDPROC, (LONG_PTR)ReverseDirectionCheckboxSubclassProc);
+            g_oldSpinXUpProc = (WNDPROC)SetWindowLongPtr(g_hSpinXUp, GWLP_WNDPROC, (LONG_PTR)SpinXUpSubclassProc);
+            g_oldSpinXDownProc = (WNDPROC)SetWindowLongPtr(g_hSpinXDown, GWLP_WNDPROC, (LONG_PTR)SpinXDownSubclassProc);
+            g_oldSpinYUpProc = (WNDPROC)SetWindowLongPtr(g_hSpinYUp, GWLP_WNDPROC, (LONG_PTR)SpinYUpSubclassProc);
+            g_oldSpinYDownProc = (WNDPROC)SetWindowLongPtr(g_hSpinYDown, GWLP_WNDPROC, (LONG_PTR)SpinYDownSubclassProc);
+            g_oldSpinSizeUpProc = (WNDPROC)SetWindowLongPtr(g_hSpinSizeUp, GWLP_WNDPROC, (LONG_PTR)SpinSizeUpSubclassProc);
+            g_oldSpinSizeDownProc = (WNDPROC)SetWindowLongPtr(g_hSpinSizeDown, GWLP_WNDPROC, (LONG_PTR)SpinSizeDownSubclassProc);
             if (g_hTabFont) {
                 SendMessage(g_hImageList, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
                 SendMessage(g_hBrowseButton, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
@@ -3840,6 +4026,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             ShowWindow(g_hResetCycle, SW_HIDE);
             ShowWindow(g_hReverseDirectionCheckbox, SW_HIDE);
             ShowWindow(g_hResetQuit, SW_HIDE);
+            ShowWindow(g_hSpinXUp, SW_HIDE);
+            ShowWindow(g_hSpinXDown, SW_HIDE);
+            ShowWindow(g_hSpinYUp, SW_HIDE);
+            ShowWindow(g_hSpinYDown, SW_HIDE);
+            ShowWindow(g_hSpinSizeUp, SW_HIDE);
+            ShowWindow(g_hSpinSizeDown, SW_HIDE);
             return 0;
         }
         case WM_DISPLAYCHANGE: {
@@ -3903,6 +4095,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     ShowWindow(g_hResetCycle, SW_HIDE);
                     ShowWindow(g_hReverseDirectionCheckbox, SW_HIDE);
                     ShowWindow(g_hResetQuit, SW_HIDE);
+                    ShowWindow(g_hSpinXUp, SW_HIDE);
+                    ShowWindow(g_hSpinXDown, SW_HIDE);
+                    ShowWindow(g_hSpinYUp, SW_HIDE);
+                    ShowWindow(g_hSpinYDown, SW_HIDE);
+                    ShowWindow(g_hSpinSizeUp, SW_HIDE);
+                    ShowWindow(g_hSpinSizeDown, SW_HIDE);
                     InvalidateRect(hwnd, NULL, TRUE);
                     break;
                 case ID_TAB_BUTTON2:
@@ -3923,6 +4121,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     ShowWindow(g_hResetCycle, SW_HIDE);
                     ShowWindow(g_hReverseDirectionCheckbox, SW_HIDE);
                     ShowWindow(g_hResetQuit, SW_HIDE);
+                    ShowWindow(g_hSpinXUp, SW_SHOW);
+                    ShowWindow(g_hSpinXDown, SW_SHOW);
+                    ShowWindow(g_hSpinYUp, SW_SHOW);
+                    ShowWindow(g_hSpinYDown, SW_SHOW);
+                    ShowWindow(g_hSpinSizeUp, SW_SHOW);
+                    ShowWindow(g_hSpinSizeDown, SW_SHOW);
                     UpdateOffsetEditControls();
                     UpdateScaleControls();
                     InvalidateRect(g_hMonitorList, NULL, TRUE);
@@ -3946,6 +4150,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     ShowWindow(g_hResetCycle, SW_SHOW);
                     ShowWindow(g_hReverseDirectionCheckbox, SW_SHOW);
                     ShowWindow(g_hResetQuit, SW_SHOW);
+                    ShowWindow(g_hSpinXUp, SW_HIDE);
+                    ShowWindow(g_hSpinXDown, SW_HIDE);
+                    ShowWindow(g_hSpinYUp, SW_HIDE);
+                    ShowWindow(g_hSpinYDown, SW_HIDE);
+                    ShowWindow(g_hSpinSizeUp, SW_HIDE);
+                    ShowWindow(g_hSpinSizeDown, SW_HIDE);
                     InvalidateRect(hwnd, NULL, TRUE);
                     break;
                 case ID_BROWSE_BUTTON: 
@@ -4015,6 +4225,60 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     if (HIWORD(wParam) == BN_CLICKED) 
                         ToggleReverseDirection(); 
                     break;
+                case ID_SPIN_X_UP:
+                    g_offsetX++;
+                    CorrectOffsetValues();
+                    UpdateOffsetEditControls();
+                    if (g_currentImageIndex != -1) 
+                        SaveCurrentImageSettings();
+                    g_settingsChanged = true;
+                    break;
+                case ID_SPIN_X_DOWN:
+                    g_offsetX--;
+                    CorrectOffsetValues();
+                    UpdateOffsetEditControls();
+                    if (g_currentImageIndex != -1) 
+                        SaveCurrentImageSettings();
+                    g_settingsChanged = true;
+                    break;
+                case ID_SPIN_Y_UP:
+                    g_offsetY++;
+                    CorrectOffsetValues();
+                    UpdateOffsetEditControls();
+                    if (g_currentImageIndex != -1) 
+                        SaveCurrentImageSettings();
+                    g_settingsChanged = true;
+                    break;
+                case ID_SPIN_Y_DOWN:
+                    g_offsetY--;
+                    CorrectOffsetValues();
+                    UpdateOffsetEditControls();
+                    if (g_currentImageIndex != -1) 
+                        SaveCurrentImageSettings();
+                    g_settingsChanged = true;
+                    break;
+                case ID_SPIN_SIZE_UP: {
+                    float newScale = std::min(2.0f, g_imageScale.load() + 0.01f);
+                    g_imageScale.store(newScale);
+                    CorrectScaleValue();
+                    UpdateScaleControls();
+                    ApplyScaleChange();
+                    if (g_currentImageIndex != -1) 
+                        SaveCurrentImageSettings();
+                    g_settingsChanged = true;
+                    break;
+                }
+                case ID_SPIN_SIZE_DOWN: {
+                    float newScale = std::max(0.0f, g_imageScale.load() - 0.01f);
+                    g_imageScale.store(newScale);
+                    CorrectScaleValue();
+                    UpdateScaleControls();
+                    ApplyScaleChange();
+                    if (g_currentImageIndex != -1) 
+                        SaveCurrentImageSettings();
+                    g_settingsChanged = true;
+                    break;
+                }
             }
             return 0;
         case WM_SYSCOMMAND: {
@@ -4127,9 +4391,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 CreateOwnerDrawMenu(hMenu, 1, ID_TRAY_SHOW, L"Settings");
                 CreateOwnerDrawMenu(hMenu, 2, ID_TRAY_NEXT_IMAGE, L"Next Image");
                 CreateOwnerDrawMenu(hMenu, 3, ID_TRAY_EXIT, L"Quit");
-                TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, g_hwnd, NULL);
+                SetForegroundWindow(g_hMenuOwner);
+                TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, g_hMenuOwner, NULL);
                 DestroyMenu(hMenu);
-                PostMessage(g_hwnd, WM_NULL, 0, 0);
             }
             return 0;
         case WM_DESTROY: {
@@ -4145,6 +4409,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 g_currentOverlay = NULL; 
                 g_currentOverlayAtomic = nullptr; 
             }
+            if (g_hMenuOwner) 
+                DestroyWindow(g_hMenuOwner);
             if (g_oldImageListProc) 
                 SetWindowLongPtr(g_hImageList, GWLP_WNDPROC, (LONG_PTR)g_oldImageListProc);
             if (g_oldMonitorListProc) 
@@ -4185,6 +4451,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 SetWindowLongPtr(g_hHideOverlayCheckbox, GWLP_WNDPROC, (LONG_PTR)g_oldHideOverlayCheckboxProc);
             if (g_oldReverseDirectionCheckboxProc) 
                 SetWindowLongPtr(g_hReverseDirectionCheckbox, GWLP_WNDPROC, (LONG_PTR)g_oldReverseDirectionCheckboxProc);
+            if (g_oldSpinXUpProc) 
+                SetWindowLongPtr(g_hSpinXUp, GWLP_WNDPROC, (LONG_PTR)g_oldSpinXUpProc);
+            if (g_oldSpinXDownProc) 
+                SetWindowLongPtr(g_hSpinXDown, GWLP_WNDPROC, (LONG_PTR)g_oldSpinXDownProc);
+            if (g_oldSpinYUpProc) 
+                SetWindowLongPtr(g_hSpinYUp, GWLP_WNDPROC, (LONG_PTR)g_oldSpinYUpProc);
+            if (g_oldSpinYDownProc) 
+                SetWindowLongPtr(g_hSpinYDown, GWLP_WNDPROC, (LONG_PTR)g_oldSpinYDownProc);
+            if (g_oldSpinSizeUpProc) 
+                SetWindowLongPtr(g_hSpinSizeUp, GWLP_WNDPROC, (LONG_PTR)g_oldSpinSizeUpProc);
+            if (g_oldSpinSizeDownProc) 
+                SetWindowLongPtr(g_hSpinSizeDown, GWLP_WNDPROC, (LONG_PTR)g_oldSpinSizeDownProc);
             StopRenderThread();
             UnregisterHotkeys();
             if (g_settingsChanged) 
@@ -4266,17 +4544,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 }
                 std::wstring xb = L"[" + std::to_wstring(-maxX) + L"; " + std::to_wstring(maxX) + L"]";
                 std::wstring yb = L"[" + std::to_wstring(-maxY) + L"; " + std::to_wstring(maxY) + L"]";
-                RECT xbr = {85, 124, 220, 155}; 
+                RECT xbr = {100, 124, 240, 155};
                 FillRect(hdc, &xbr, g_hBackgroundBrush.get()); 
                 DrawText(hdc, xb.c_str(), -1, &xbr, DT_LEFT | DT_TOP);
-                RECT ybr = {85, 147, 220, 180}; 
+                RECT ybr = {100, 147, 240, 180};
                 FillRect(hdc, &ybr, g_hBackgroundBrush.get()); 
                 DrawText(hdc, yb.c_str(), -1, &ybr, DT_LEFT | DT_TOP);
                 RECT str = {8, 171, 280, 185}; 
                 FillRect(hdc, &str, g_hBackgroundBrush.get()); 
                 DrawText(hdc, L"Size", -1, &str, DT_LEFT | DT_TOP);
                 std::wstring szb = L"[0.00; 2.00]";
-                RECT szbr = {67, 213, 200, 240}; 
+                RECT szbr = {82, 213, 220, 240}; 
                 FillRect(hdc, &szbr, g_hBackgroundBrush.get()); 
                 DrawText(hdc, szb.c_str(), -1, &szbr, DT_LEFT | DT_TOP);
             }
@@ -4477,6 +4755,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     wcPopup.lpszClassName = L"PopupInfoClass";
     wcPopup.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClass(&wcPopup);
+    WNDCLASS wcMenuOwner = {};
+    wcMenuOwner.lpfnWndProc = MenuOwnerProc;
+    wcMenuOwner.hInstance = hInstance;
+    wcMenuOwner.lpszClassName = L"MenuOwnerClass";
+    RegisterClass(&wcMenuOwner);
     if (!RegisterClass(&wc)) 
         return 0;
     g_hwnd = CreateWindowEx(0, CLASS_NAME, L"Custom Desktop Overlay", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 300, 300, NULL, NULL, hInstance, NULL);
