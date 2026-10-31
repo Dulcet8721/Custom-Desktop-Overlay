@@ -95,12 +95,14 @@ struct EditField {
 };
 struct GdiObjectDeleter {
     void operator()(HGDIOBJ obj) const {
-        if (obj) DeleteObject(obj);
+        if (obj) 
+            DeleteObject(obj);
     }
 };
 struct IconDeleter {
     void operator()(HICON icon) const {
-        if (icon) DestroyIcon(icon);
+        if (icon) 
+            DestroyIcon(icon);
     }
 };
 using UniqueHBrush = std::unique_ptr<std::remove_pointer<HBRUSH>::type, GdiObjectDeleter>;
@@ -121,6 +123,16 @@ struct ListBoxState {
     UINT_PTR tooltipTimer;
     bool tooltipActive;
 };
+struct OverlayRenderBuffer {
+    HDC hdcMem = NULL;
+    HBITMAP hBitmap = NULL;
+    HBITMAP hOldBitmap = NULL;
+    int width = 0;
+    int height = 0;
+    std::atomic<bool> valid{false};
+    std::mutex mutex;
+};
+OverlayRenderBuffer g_renderBuffer;
 std::unordered_map<HWND, ButtonState> g_buttonStates;
 std::unordered_map<HWND, ListBoxState> g_listBoxStates;
 class AnimatedGIF {
@@ -165,7 +177,8 @@ private:
             WICRect rc = {0, 0, (INT)width, (INT)height};
             HRESULT hr = pConverter->CopyPixels(&rc, bmpData.Stride, bmpData.Stride * height, (BYTE*)bmpData.Scan0);
             bitmap->UnlockBits(&bmpData);
-            if (SUCCEEDED(hr)) return bitmap;
+            if (SUCCEEDED(hr)) 
+                return bitmap;
         }
         return nullptr;
     }
@@ -205,8 +218,8 @@ public:
             g.FillRectangle(&clearBrush, 0, 0, (INT)m_width, (INT)m_height);
         }
         m_frames.reserve(frameCount);
-        for (UINT i = 0; 
-            i < frameCount; ++i) {
+        std::unique_ptr<Gdiplus::Bitmap> previousComposite;
+        for (UINT i = 0; i < frameCount; ++i) {
             IWICBitmapFrameDecode* pFrame = NULL;
             hr = m_pDecoder->GetFrame(i, &pFrame);
             if (FAILED(hr)) 
@@ -247,19 +260,24 @@ public:
                 if (SUCCEEDED(hr)) {
                     UINT frameW, frameH;
                     pConverter->GetSize(&frameW, &frameH);
-                    if (frameW > 0 && frameH > 0) 
+                    if (frameW > 0 && frameH > 0)
                         frameBitmap = CreateBitmapFromConverter(pConverter, frameW, frameH);
                 }
                 pConverter->Release();
                 pConverter = NULL;
             }
             pFrame->Release();
-            pFrame = NULL;
             if (!frameBitmap) {
                 frameBitmap = std::make_unique<Gdiplus::Bitmap>(m_width, m_height, PixelFormat32bppPARGB);
                 Gdiplus::Graphics g(frameBitmap.get());
                 Gdiplus::SolidBrush clear(Gdiplus::Color(0, 0, 0, 0));
                 g.FillRectangle(&clear, 0, 0, (INT)m_width, (INT)m_height);
+            }
+            std::unique_ptr<Gdiplus::Bitmap> savedComposite;
+            if (disposal == 3) {
+                savedComposite = std::make_unique<Gdiplus::Bitmap>(m_width, m_height, PixelFormat32bppPARGB);
+                Gdiplus::Graphics g(savedComposite.get());
+                g.DrawImage(composite.get(), 0, 0, (INT)m_width, (INT)m_height);
             }
             auto fullFrame = std::make_unique<Gdiplus::Bitmap>(m_width, m_height, PixelFormat32bppPARGB);
             {
@@ -285,14 +303,19 @@ public:
                     g.FillRectangle(&clear, (INT)left, (INT)top, (INT)width, (INT)height);
                     break;
                 }
-                case 3: 
+                case 3:
+                    if (savedComposite) {
+                        Gdiplus::Graphics g(composite.get());
+                        g.DrawImage(savedComposite.get(), 0, 0, (INT)m_width, (INT)m_height);
+                    }
                     break;
-                default: {
-                    Gdiplus::Graphics g(composite.get());
-                    g.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
-                    g.DrawImage(m_frames.back().bitmap.get(), 0, 0, (INT)m_width, (INT)m_height);
+                default:
+                    {
+                        Gdiplus::Graphics g(composite.get());
+                        g.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
+                        g.DrawImage(m_frames.back().bitmap.get(), 0, 0, (INT)m_width, (INT)m_height);
+                    }
                     break;
-                }
             }
         }
         m_currentFrame = 0;
@@ -346,10 +369,10 @@ public:
     }
     bool IsInitialized() const {
         return m_isInitialized; 
-        }
+    }
     bool IsAnimated() const {
         return m_frames.size() > 1; 
-        }
+    }
     int GetWidth() const {
         return (int)m_width; 
     }
@@ -406,8 +429,8 @@ int ShowOwnerDrawMessageBox(HWND hwndParent, const std::wstring& message, UINT t
 LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 bool ResetHotkeyField(int fieldId, wchar_t defaultKey, wchar_t& currentKey, wchar_t& lastValidKey, EditField& field, bool showConflictMessage = true);
 void UpdateOffsetBoundsDisplay();
-void CheckMonitorConfiguration();
 void UpdateOverlayPosition();
+void UpdateOverlayPosition(int monitorX, int monitorY, int monitorWidth, int monitorHeight);
 void RenderOverlay();
 void RenderOverlayInThread();
 void ApplyScaleChange();
@@ -415,6 +438,10 @@ void CycleImageSelection();
 void ToggleReverseDirection();
 void SetCurrentImageSettings(int index);
 void SaveCurrentImageSettings();
+void EnsureRenderBuffer(int width, int height);
+void FreeRenderBuffer();
+void InvalidateRenderBuffer();
+void RenderStaticToBufferInternal();
 NOTIFYICONDATA nid = {};
 HWND g_hwnd = NULL;
 HWND g_hImageList = NULL;
@@ -515,8 +542,6 @@ EditField g_hotkeyToggleField = {L"H", false, 0, 0, false, ID_HOTKEY_TOGGLE_DISP
 EditField g_hotkeySettingsField = {L"S", false, 0, 0, false, ID_HOTKEY_SETTINGS_DISPLAY, NULL, false};
 EditField g_hotkeyCycleField = {L"N", false, 0, 0, false, ID_HOTKEY_CYCLE_DISPLAY, NULL, false};
 EditField g_hotkeyQuitField = {L"Q", false, 0, 0, false, ID_HOTKEY_QUIT_DISPLAY, NULL, false};
-static int g_prevMonitorCount = 0;
-static std::vector<RECT> g_prevMonitorRects;
 std::shared_ptr<Bitmap> g_cachedBitmapShared;
 int g_originalImageWidth = 0;
 int g_originalImageHeight = 0;
@@ -577,7 +602,7 @@ std::map<std::wstring, std::wstring> GetDeviceIdMap() {
     ddMonitor.cb = sizeof(DISPLAY_DEVICE);
     for (DWORD adapter = 0; EnumDisplayDevices(NULL, adapter, &ddAdapter, 0); ++adapter) {
         for (DWORD monitor = 0; EnumDisplayDevices(ddAdapter.DeviceName, monitor, &ddMonitor, EDD_GET_DEVICE_INTERFACE_NAME); ++monitor) {
-            if (ddMonitor.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) 
+            if (ddMonitor.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)
                 deviceMap[ddMonitor.DeviceName] = ddMonitor.DeviceID;
         }
     }
@@ -602,8 +627,7 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
     devMode.dmSize = sizeof(DEVMODE);
     if (EnumDisplaySettings(monitorInfo.szDevice, ENUM_CURRENT_SETTINGS, &devMode)) {
         info.name = std::to_wstring(devMode.dmPelsWidth) + L"x" + std::to_wstring(devMode.dmPelsHeight) + L" @" + std::to_wstring(devMode.dmDisplayFrequency) + L"Hz";
-    }
-    else {
+    } else {
         int w = info.rect.right - info.rect.left;
         int h = info.rect.bottom - info.rect.top;
         info.name = std::to_wstring(w) + L"x" + std::to_wstring(h);
@@ -662,7 +686,8 @@ std::vector<std::pair<std::wstring, std::wstring>> GetMonitorFriendlyNamesPowerS
                     };
                     std::wstring wInstance = toWide(instancePart);
                     std::wstring wName = toWide(namePart);
-                    if (!wInstance.empty() && !wName.empty()) result.emplace_back(wInstance, wName);
+                    if (!wInstance.empty() && !wName.empty()) 
+                        result.emplace_back(wInstance, wName);
                 }
             }
             pos = end + 1;
@@ -670,79 +695,6 @@ std::vector<std::pair<std::wstring, std::wstring>> GetMonitorFriendlyNamesPowerS
     }
     CloseHandle(hReadPipe);
     return result;
-}
-std::vector<std::wstring> WrapText(HDC hdc, const std::wstring& text, int maxWidth) {
-    std::vector<std::wstring> lines;
-    std::wstring currentLine;
-    size_t pos = 0;
-    const size_t len = text.length();
-    while (pos < len) {
-        size_t spacePos = text.find(L' ', pos);
-        if (spacePos == std::wstring::npos) spacePos = len;
-        std::wstring word = text.substr(pos, spacePos - pos);
-        std::wstring testLine = currentLine.empty() ? word : currentLine + L" " + word;
-        SIZE sz;
-        GetTextExtentPoint32(hdc, testLine.c_str(), (int)testLine.length(), &sz);
-        if (sz.cx <= maxWidth) {
-            currentLine = testLine;
-            pos = spacePos;
-            if (pos < len && text[pos] == L' ') 
-                pos++;
-        } 
-        else {
-            if (currentLine.empty()) {
-                std::wstring part;
-                for (size_t i = 0; i < word.length(); ++i) {
-                    std::wstring testPart = part + word[i];
-                    GetTextExtentPoint32(hdc, testPart.c_str(), (int)testPart.length(), &sz);
-                    if (sz.cx <= maxWidth)
-                        part = testPart;
-                    else {
-                        if (!part.empty()) 
-                            lines.push_back(part);
-                        part = std::wstring(1, word[i]);
-                    }
-                }
-                if (!part.empty()) 
-                    lines.push_back(part);
-                currentLine.clear();
-                pos = spacePos;
-                if (pos < len && text[pos] == L' ') 
-                    pos++;
-            } 
-            else {
-                std::wstring part;
-                size_t i;
-                for (i = 0; i < word.length(); ++i) {
-                    std::wstring testPart = part + word[i];
-                    std::wstring testLine2 = currentLine + L" " + testPart;
-                    GetTextExtentPoint32(hdc, testLine2.c_str(), (int)testLine2.length(), &sz);
-                    if (sz.cx <= maxWidth)
-                        part = testPart;
-                    else break;
-                }
-                if (!part.empty()) {
-                    lines.push_back(currentLine + L" " + part);
-                    std::wstring remaining = word.substr(i);
-                    if (!remaining.empty()) {
-                        currentLine.clear();
-                        std::wstring remainingText = remaining + (spacePos < len ? text.substr(spacePos) : L"");
-                        std::vector<std::wstring> remainingLines = WrapText(hdc, remainingText, maxWidth);
-                        lines.insert(lines.end(), remainingLines.begin(), remainingLines.end());
-                        break;
-                    }
-                } 
-                else {
-                    lines.push_back(currentLine);
-                    currentLine.clear();
-                }
-                break;
-            }
-        }
-    }
-    if (!currentLine.empty())
-        lines.push_back(currentLine);
-    return lines;
 }
 std::wstring ExtractModelFromInstanceName(const std::wstring& instanceName) {
     size_t start = instanceName.find(L'\\');
@@ -770,6 +722,9 @@ LRESULT CALLBACK MenuOwnerProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     if (msg == WM_COMMAND)
         return SendMessage(g_hwnd, msg, wParam, lParam);
     return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+void InvalidateRenderBuffer() {
+    g_renderBuffer.valid.store(false, std::memory_order_relaxed);
 }
 void LoadMonitorNamesThread() {
     if (g_programExiting) 
@@ -802,6 +757,32 @@ void LoadMonitorNamesThread() {
     }
     g_monitorNamesThreadRunning = false;
 }
+void RenderStaticToBufferInternal() {
+    if (!g_cachedBitmapShared) 
+        return;
+    int windowWidth = 2 * g_originalImageWidth;
+    int windowHeight = 2 * g_originalImageHeight;
+    if (windowWidth <= 0 || windowHeight <= 0) 
+        return;
+    float scale = g_imageScale.load(std::memory_order_relaxed);
+    int drawWidth = (int)(g_originalImageWidth * scale);
+    int drawHeight = (int)(g_originalImageHeight * scale);
+    int drawX = (windowWidth - drawWidth) / 2;
+    int drawY = (windowHeight - drawHeight) / 2;
+    EnsureRenderBuffer(windowWidth, windowHeight);
+    {
+        std::lock_guard<std::mutex> lock(g_renderBuffer.mutex);
+        Graphics graphics(g_renderBuffer.hdcMem);
+        graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+        graphics.SetCompositingMode(CompositingModeSourceCopy);
+        SolidBrush clearBrush(Color(0,0,0,0));
+        graphics.FillRectangle(&clearBrush, 0, 0, windowWidth, windowHeight);
+        graphics.SetCompositingMode(CompositingModeSourceOver);
+        Rect destRect(drawX, drawY, drawWidth, drawHeight);
+        graphics.DrawImage(g_cachedBitmapShared.get(), destRect);
+        g_renderBuffer.valid.store(true, std::memory_order_relaxed);
+    }
+}
 void ForceForegroundWindow(HWND hwnd) {
     DWORD foreThread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
     DWORD appThread = GetCurrentThreadId();
@@ -809,8 +790,7 @@ void ForceForegroundWindow(HWND hwnd) {
         AttachThreadInput(foreThread, appThread, TRUE);
         SetForegroundWindow(hwnd);
         AttachThreadInput(foreThread, appThread, FALSE);
-    }
-    else SetForegroundWindow(hwnd);
+    } else SetForegroundWindow(hwnd);
     BringWindowToTop(hwnd);
     SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
 }
@@ -828,17 +808,14 @@ void UpdateMonitorList() {
     }
     int totalMonitors = (int)g_monitors.size();
     int maxMonitorScroll = std::max(0, totalMonitors - VISIBLE_ITEMS_MONITORS);
-    if (g_monitorListScrollPos > maxMonitorScroll) {
+    if (g_monitorListScrollPos > maxMonitorScroll) 
         g_monitorListScrollPos = maxMonitorScroll;
-    }
-    if (totalMonitors == 0) {
+    if (totalMonitors == 0) 
         g_monitorListScrollPos = 0;
-    }
     {
         std::shared_lock<std::shared_mutex> lock(g_monitorMutex);
-        if (g_selectedMonitor >= (int)g_monitors.size()) {
+        if (g_selectedMonitor >= (int)g_monitors.size()) 
             g_selectedMonitor = 0;
-        }
     }
     if (g_hMonitorList) 
         InvalidateRect(g_hMonitorList, NULL, TRUE);
@@ -871,8 +848,7 @@ void ActivateNextMessageBox(HWND hCurrent) {
                     HWND hButton = GetDlgItem(hWnd, 1);
                     if (hButton) 
                         SetFocus(hButton);
-                } 
-                else {
+                } else {
                     HWND hButton = GetDlgItem(hWnd, 2);
                     if (hButton) 
                         SetFocus(hButton);
@@ -893,60 +869,6 @@ void UpdateOffsetBoundsDisplay() {
         RECT boundsRect = {8, 118, 280, 180};
         InvalidateRect(g_hwnd, &boundsRect, TRUE);
         UpdateWindow(g_hwnd);
-    }
-}
-void CheckMonitorConfiguration() {
-    std::vector<MonitorInfo> currentMonitors;
-    {
-        std::shared_lock<std::shared_mutex> lock(g_monitorMutex);
-        currentMonitors = g_monitors;
-    }
-    std::vector<MonitorInfo> newMonitors;
-    EnumDisplayMonitors(NULL, NULL, [](HMONITOR hMon, HDC, LPRECT rc, LPARAM lp) -> BOOL {
-        auto* vec = reinterpret_cast<std::vector<MonitorInfo>*>(lp);
-        MONITORINFOEX mi = {sizeof(mi)};
-        if (GetMonitorInfo(hMon, &mi)) {
-            MonitorInfo info;
-            info.handle = hMon;
-            info.rect = *rc;
-            info.name = L"";
-            vec->push_back(info);
-        }
-        return TRUE;
-    }, (LPARAM)&newMonitors);
-    bool configChanged = false;
-    if (newMonitors.size() != currentMonitors.size()) {
-        configChanged = true;
-    }
-    else {
-        for (size_t i = 0; i < newMonitors.size(); ++i) {
-            if (memcmp(&newMonitors[i].rect, &currentMonitors[i].rect, sizeof(RECT)) != 0) {
-                configChanged = true;
-                break;
-            }
-        }
-    }
-    if (configChanged) {
-        if (g_hMonitorList) InvalidateRect(g_hMonitorList, NULL, TRUE);
-        {
-            std::shared_lock<std::shared_mutex> lock(g_monitorMutex);
-            if (g_selectedMonitor >= (int)g_monitors.size()) {
-                g_selectedMonitor = 0;
-                g_monitorListSelected = 0;
-            }
-        }
-        CorrectOffsetValues();
-        UpdateOffsetBoundsDisplay();
-        if (g_currentOverlay) {
-            if (g_selectedMonitor != g_currentMonitor) {
-                UpdateOverlayPosition();
-                RenderOverlay();
-            }
-        }
-        g_prevMonitorCount = (int)newMonitors.size();
-        g_prevMonitorRects.clear();
-        for (const auto& m : newMonitors) 
-            g_prevMonitorRects.push_back(m.rect);
     }
 }
 bool IsSupportedImageFormat(const std::wstring& filePath) {
@@ -1043,11 +965,11 @@ std::wstring EllipsisText(HDC hdc, const std::wstring& text, int maxWidth) {
         if (sz.cx <= maxWidth) {
             best = mid;
             low = mid + 1;
-        } 
-        else high = mid - 1;
+        } else high = mid - 1;
     }
     return text.substr(0, best) + L"...";
 }
+
 void DrawSpinButton(HDC hdc, RECT rc, bool up, bool pressed, bool hover) {
     HBRUSH hBrush;
     if (pressed) 
@@ -1065,7 +987,7 @@ void DrawSpinButton(HDC hdc, RECT rc, bool up, bool pressed, bool hover) {
     DeleteObject(hBorderPen);
     int midX = (rc.left + rc.right) / 2;
     int startY;
-    if (up)
+    if (up) 
         startY = rc.top + 3;
     else startY = rc.bottom - 4;
     HBRUSH hArrowBrush = CreateSolidBrush(g_buttonTextColor);
@@ -1075,7 +997,7 @@ void DrawSpinButton(HDC hdc, RECT rc, bool up, bool pressed, bool hover) {
         int leftX = midX - half;
         int rightX = midX + half;
         int y;
-        if (up)
+        if (up) 
             y = startY + i;
         else y = startY - i;
         RECT lineRect = {leftX, y, rightX + 1, y + 1};
@@ -1131,8 +1053,8 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
         if (state.dragging && state.dragSource != -1) {
             std::vector<int> displayIndices;
             displayIndices.reserve(total);
-            for (int i = 0; i < total; ++i)
-                if (i != state.dragSource)
+            for (int i = 0; i < total; ++i) 
+                if (i != state.dragSource) 
                     displayIndices.push_back(i);
             int insertPos = state.dragTarget;
             if (insertPos < 0) 
@@ -1154,15 +1076,13 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
                     std::wstring dragText = std::to_wstring(v + 1) + L". " + g_imageFiles[state.dragSource].filename;
                     SIZE textSize;
                     GetTextExtentPoint32(hdc, dragText.c_str(), (int)dragText.length(), &textSize);
-                    if (textSize.cx > availableWidth)
-                        dragText = EllipsisText(hdc, dragText, availableWidth);
+                    if (textSize.cx > availableWidth) dragText = EllipsisText(hdc, dragText, availableWidth);
                     DrawText(hdc, dragText.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-                } 
-                else {
+                } else {
                     HBRUSH bgBrush = g_hListBoxBackgroundBrush.get();
-                    if (realIdx == g_imageListSelected)
+                    if (realIdx == g_imageListSelected) 
                         bgBrush = g_hListBoxSelectedBrush.get();
-                    else if (realIdx == state.hoverIndex && !state.dragging)
+                    else if (realIdx == state.hoverIndex && !state.dragging) 
                         bgBrush = g_hListBoxHoverBrush.get();
                     FillRect(hdc, &itemRect, bgBrush);
                     RECT textRect = itemRect;
@@ -1170,9 +1090,8 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
                     std::wstring displayText = std::to_wstring(v + 1) + L". " + g_imageFiles[realIdx].filename;
                     SIZE textSize;
                     GetTextExtentPoint32(hdc, displayText.c_str(), (int)displayText.length(), &textSize);
-                    if (textSize.cx > availableWidth) {
+                    if (textSize.cx > availableWidth) 
                         displayText = EllipsisText(hdc, displayText, availableWidth);
-                    }
                     DrawText(hdc, displayText.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                 }
             }
@@ -1184,9 +1103,9 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
                         continue;
                     if (v >= startIdx + visibleItems) 
                         break;
-                    if (displayIndices[v] == targetRealIdx) {
-                        targetV = v;
-                        break;
+                    if (displayIndices[v] == targetRealIdx) { 
+                        targetV = v; 
+                        break; 
                     }
                 }
                 if (targetV == -1 && targetRealIdx == state.dragSource) {
@@ -1197,7 +1116,7 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
                             break;
                         if (displayIndices[v] == -1) {
                             targetV = v;
-                            break;
+                            break; 
                         }
                     }
                 }
@@ -1212,15 +1131,14 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
                     DeleteObject(hDashPen);
                 }
             }
-        } 
-        else {
+        } else {
             int endIdx = std::min(startIdx + visibleItems, total);
             for (int i = startIdx; i < endIdx; i++) {
                 RECT itemRect = {rc.left + 1, rc.top + 1 + (i - startIdx) * ITEM_HEIGHT, rc.right - 1, rc.top + 1 + (i - startIdx + 1) * ITEM_HEIGHT};
                 HBRUSH bgBrush;
-                if (i == g_imageListSelected)
+                if (i == g_imageListSelected) 
                     bgBrush = g_hListBoxSelectedBrush.get();
-                else if (i == state.hoverIndex)
+                else if (i == state.hoverIndex) 
                     bgBrush = g_hListBoxHoverBrush.get();
                 else bgBrush = g_hListBoxBackgroundBrush.get();
                 FillRect(hdc, &itemRect, bgBrush);
@@ -1229,7 +1147,7 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
                 std::wstring displayText = std::to_wstring(i + 1) + L". " + g_imageFiles[i].filename;
                 SIZE textSize;
                 GetTextExtentPoint32(hdc, displayText.c_str(), (int)displayText.length(), &textSize);
-                if (textSize.cx > availableWidth)
+                if (textSize.cx > availableWidth) 
                     displayText = EllipsisText(hdc, displayText, availableWidth);
                 DrawText(hdc, displayText.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             }
@@ -1246,8 +1164,7 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
             }
         }
         DrawScrollIndicator(hdc, rc, total, visibleItems, g_imageListScrollPos, g_darkTheme);
-    }
-    else if (listType == ID_MONITOR_LIST) {
+    } else if (listType == ID_MONITOR_LIST) {
         int total = (int)g_monitors.size();
         int startIdx = g_monitorListScrollPos;
         int visibleItems = VISIBLE_ITEMS_MONITORS;
@@ -1256,23 +1173,23 @@ void DrawOwnerDrawListBox(HDC hdc, HWND hwnd, int listType, int hoverIndex) {
         for (int i = startIdx; i < endIdx; i++) {
             RECT itemRect = {rc.left + 1, rc.top + 1 + (i - startIdx) * ITEM_HEIGHT, rc.right - 1, rc.top + 1 + (i - startIdx + 1) * ITEM_HEIGHT};
             HBRUSH bgBrush;
-            if (i == g_monitorListSelected)
+            if (i == g_monitorListSelected) 
                 bgBrush = g_hListBoxSelectedBrush.get();
-            else if (i == state.hoverIndex)
+            else if (i == state.hoverIndex) 
                 bgBrush = g_hListBoxHoverBrush.get();
             else bgBrush = g_hListBoxBackgroundBrush.get();
             FillRect(hdc, &itemRect, bgBrush);
             std::wstring displayText = std::to_wstring(i + 1) + L". ";
-            if (!g_monitors[i].friendlyName.empty())
+            if (!g_monitors[i].friendlyName.empty()) 
                 displayText += g_monitors[i].friendlyName + L" (";
             displayText += g_monitors[i].name;
-            if (!g_monitors[i].friendlyName.empty())
+            if (!g_monitors[i].friendlyName.empty()) 
                 displayText += L")";
             RECT textRect = itemRect;
             textRect.left += 2;
             SIZE textSize;
             GetTextExtentPoint32(hdc, displayText.c_str(), (int)displayText.length(), &textSize);
-            if (textSize.cx > availableWidth)
+            if (textSize.cx > availableWidth) 
                 displayText = EllipsisText(hdc, displayText, availableWidth);
             DrawText(hdc, displayText.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         }
@@ -1561,7 +1478,7 @@ LRESULT HandleOwnerDrawCheckbox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             wchar_t buffer[256];
             GetWindowText(hwnd, buffer, 256);
             std::wstring text = buffer;
-            if (!text.empty() && text[0] == L' ')
+            if (!text.empty() && text[0] == L' ') 
                 text = text.substr(1);
             bool isChecked = (GetDlgCtrlID(hwnd) == ID_HIDE_OVERLAY_CHECKBOX) ? g_hideOverlay : g_reverseDirection;
             DrawOwnerDrawCheckbox(hdcMem, hwnd, isChecked, text, hoverState[hwnd]);
@@ -1639,8 +1556,8 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     int scrollPos = g_imageListScrollPos;
                     std::vector<int> displayIndices;
                     displayIndices.reserve(total);
-                    for (int i = 0; i < total; ++i)
-                        if (i != state.dragSource)
+                    for (int i = 0; i < total; ++i) 
+                        if (i != state.dragSource) 
                             displayIndices.push_back(i);
                     int insertPos = state.dragTarget;
                     if (insertPos < 0) 
@@ -1652,24 +1569,21 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     int newTarget = state.dragTarget;
                     if (yPos < 2) {
                         newTarget = 0;
-                    }
-                    else if (yPos >= 2 + visibleItems * ITEM_HEIGHT) {
+                    } else if (yPos >= 2 + visibleItems * ITEM_HEIGHT)
                         newTarget = total;
-                    }
                     else {
                         int idx = scrollPos + line;
                         if (idx >= 0 && idx < (int)displayIndices.size()) {
                             int elem = displayIndices[idx];
                             int midY = 2 + line * ITEM_HEIGHT + ITEM_HEIGHT / 2;
-                            if (elem == -1)
+                            if (elem == -1) 
                                 newTarget = idx;
                             else {
-                                if (yPos < midY)
+                                if (yPos < midY) 
                                     newTarget = idx;
                                 else newTarget = idx + 1;
                             }
-                        }
-                        else newTarget = total;
+                        } else newTarget = total;
                     }
                     if (newTarget < 0) 
                         newTarget = 0;
@@ -1706,10 +1620,8 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     state.dragStart = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
                     SetCapture(hwnd);
                     g_imageListSelected = itemIndex;
-                } 
-                else g_monitorListSelected = itemIndex;
-            } 
-            else {
+                } else g_monitorListSelected = itemIndex;
+            } else {
                 if (listType == ID_IMAGE_LIST) 
                     g_imageListSelected = -1;
                 else g_monitorListSelected = -1;
@@ -1727,22 +1639,19 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                             int oldSize = (int)g_imageFiles.size();
                             ImageFile item = g_imageFiles[src];
                             g_imageFiles.erase(g_imageFiles.begin() + src);
-                            if (dst == oldSize)
+                            if (dst == oldSize) 
                                 g_imageFiles.push_back(item);
-                            else
-                                g_imageFiles.insert(g_imageFiles.begin() + dst, item);
+                            else g_imageFiles.insert(g_imageFiles.begin() + dst, item);
                             int actualPos = (dst == oldSize) ? oldSize - 1 : dst;
-                            if (g_currentImageIndex == src)
+                            if (g_currentImageIndex == src) 
                                 g_currentImageIndex = actualPos;
-                            else if (g_currentImageIndex > src && g_currentImageIndex <= dst)
+                            else if (g_currentImageIndex > src && g_currentImageIndex <= dst) 
                                 g_currentImageIndex--;
-                            else if (g_currentImageIndex < src && g_currentImageIndex >= dst)
+                            else if (g_currentImageIndex < src && g_currentImageIndex >= dst) 
                                 g_currentImageIndex++;
                             g_imageListSelected = actualPos;
                             g_settingsChanged = true;
-                        }
-                        else
-                            g_imageListSelected = state.dragSource;
+                        } else g_imageListSelected = state.dragSource;
                     }
                     state.dragging = false;
                     state.dragPending = false;
@@ -1750,8 +1659,7 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     state.dragTarget = -1;
                     ReleaseCapture();
                     InvalidateRect(hwnd, NULL, TRUE);
-                }
-                else if (state.dragPending) {
+                } else if (state.dragPending) {
                     state.dragPending = false;
                     state.dragSource = -1;
                     ReleaseCapture();
@@ -1778,19 +1686,31 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             if (itemIndex >= 0 && itemIndex < itemCount && itemIndex >= startIdx && itemIndex < startIdx + visibleItems) {
                 if (listType == ID_IMAGE_LIST) {
                     CreateOverlayWindow(itemIndex, true);
-                }
-                else {
+                } else {
                     g_monitorListSelected = itemIndex;
                     g_selectedMonitor = itemIndex;
                     CorrectOffsetValues();
                     UpdateOffsetBoundsDisplay();
                     if (g_currentOverlay) {
-                        UpdateOverlayPosition();
+                        int monX=0, monY=0, monW=0, monH=0;
+                        {
+                            std::shared_lock<std::shared_mutex> lock(g_monitorMutex);
+                            if (g_selectedMonitor >= 0 && g_selectedMonitor < (int)g_monitors.size()) {
+                                const auto& m = g_monitors[g_selectedMonitor];
+                                monX = m.rect.left;
+                                monY = m.rect.top;
+                                monW = m.rect.right - m.rect.left;
+                                monH = m.rect.bottom - m.rect.top;
+                            } else {
+                                monW = GetSystemMetrics(SM_CXSCREEN);
+                                monH = GetSystemMetrics(SM_CYSCREEN);
+                            }
+                        }
+                        UpdateOverlayPosition(monX, monY, monW, monH);
                         RenderOverlay();
                         g_currentMonitor = g_selectedMonitor;
                     }
-                    if (g_currentImageIndex != -1)
-                        SaveCurrentImageSettings();
+                    if (g_currentImageIndex != -1) SaveCurrentImageSettings();
                     g_settingsChanged = true;
                 }
                 InvalidateRect(hwnd, NULL, TRUE);
@@ -1803,23 +1723,18 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 int startIdx = g_imageListScrollPos;
                 int itemIndex = startIdx + (yPos - 2) / ITEM_HEIGHT;
                 int itemCount = (int)g_imageFiles.size();
-                if (itemIndex >= 0 && itemIndex < itemCount && 
-                    itemIndex >= startIdx && itemIndex < startIdx + VISIBLE_ITEMS_IMAGES) {
+                if (itemIndex >= 0 && itemIndex < itemCount && itemIndex >= startIdx && itemIndex < startIdx + VISIBLE_ITEMS_IMAGES) {
                     g_imageListSelected = itemIndex;
-                } 
-                else g_imageListSelected = -1;
+                } else g_imageListSelected = -1;
                 InvalidateRect(hwnd, NULL, TRUE);
-            }
-            else if (listType == ID_MONITOR_LIST) {
+            } else if (listType == ID_MONITOR_LIST) {
                 int yPos = GET_Y_LPARAM(lParam);
                 int startIdx = g_monitorListScrollPos;
                 int itemIndex = startIdx + (yPos - 2) / ITEM_HEIGHT;
                 int itemCount = (int)g_monitors.size();
-                if (itemIndex >= 0 && itemIndex < itemCount && 
-                    itemIndex >= startIdx && itemIndex < startIdx + VISIBLE_ITEMS_MONITORS) {
+                if (itemIndex >= 0 && itemIndex < itemCount && itemIndex >= startIdx && itemIndex < startIdx + VISIBLE_ITEMS_MONITORS) {
                     g_monitorListSelected = itemIndex;
-                } 
-                else g_monitorListSelected = -1;
+                } else g_monitorListSelected = -1;
                 InvalidateRect(hwnd, NULL, TRUE);
             }
             return 0;
@@ -1840,7 +1755,7 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             int& scrollPos = (listType == ID_IMAGE_LIST) ? g_imageListScrollPos : g_monitorListScrollPos;
             int maxItems = (listType == ID_IMAGE_LIST) ? (int)g_imageFiles.size() : (int)g_monitors.size();
             int visibleItems = (listType == ID_IMAGE_LIST) ? VISIBLE_ITEMS_IMAGES : VISIBLE_ITEMS_MONITORS;
-            if (delta > 0)
+            if (delta > 0) 
                 scrollPos = std::max(0, scrollPos - 3);
             else scrollPos = std::min(std::max(0, maxItems - visibleItems), scrollPos + 3);
             InvalidateRect(hwnd, NULL, TRUE);
@@ -1867,9 +1782,10 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 void ApplyOffsetFromField(EditField* field, bool isX) {
     int value = 0;
     try {
-        if (!field->text.empty()) value = std::stoi(field->text); 
-    }
-    catch (...) {
+        if (!field->text.empty()) 
+            value = std::stoi(field->text); 
+    } 
+    catch(...) {
         value = 0; 
     }
     if (value > 9999) 
@@ -1886,9 +1802,10 @@ void ApplyOffsetFromField(EditField* field, bool isX) {
 void ApplyScaleFromField(EditField* field) {
     float value = 1.0f;
     try {
-        if (!field->text.empty()) value = std::stof(field->text); 
-    }
-    catch (...) {
+        if (!field->text.empty()) 
+            value = std::stof(field->text); 
+        } 
+    catch(...) {
         value = 1.0f; 
     }
     if (value < 0.0f) 
@@ -1897,7 +1814,7 @@ void ApplyScaleFromField(EditField* field) {
         value = 2.0f;
     g_imageScale.store(value, std::memory_order_relaxed);
     CorrectScaleValue();
-    if (g_currentImageIndex != -1) 
+    if (g_currentImageIndex != -1)
         SaveCurrentImageSettings();
 }
 bool ResetHotkeyField(int fieldId, wchar_t defaultKey, wchar_t& currentKey, wchar_t& lastValidKey, EditField& field, bool showConflictMessage) {
@@ -1910,8 +1827,7 @@ bool ResetHotkeyField(int fieldId, wchar_t defaultKey, wchar_t& currentKey, wcha
         }
         field.text = lastValidKey ? std::wstring(1, lastValidKey) : L"";
         currentKey = lastValidKey;
-    }
-    else {
+    } else {
         currentKey = defaultKey;
         lastValidKey = defaultKey;
         field.text = std::wstring(1, defaultKey);
@@ -1924,7 +1840,7 @@ bool ResetHotkeyField(int fieldId, wchar_t defaultKey, wchar_t& currentKey, wcha
 void ApplyHotkeyFromField(EditField* field, int id) {
     wchar_t oldToggle = g_toggleHotkeyKey, oldSettings = g_settingsHotkeyKey, oldCycle = g_cycleHotkeyKey, oldQuit = g_quitHotkeyKey;
     if (field->text.empty()) {
-        if (id == 1)
+        if (id == 1) 
             g_toggleHotkeyKey = 0;
         else if (id == 2) 
             g_settingsHotkeyKey = 0;
@@ -1932,8 +1848,7 @@ void ApplyHotkeyFromField(EditField* field, int id) {
             g_cycleHotkeyKey = 0;
         else if (id == 4) 
             g_quitHotkeyKey = 0;
-    }
-    else {
+    } else {
         wchar_t key = std::towupper(field->text[0]);
         if (IsValidHotkeyChar(key)) {
             std::wstring conflictAction;
@@ -1944,24 +1859,20 @@ void ApplyHotkeyFromField(EditField* field, int id) {
                     field->text = g_lastValidToggleKey ? std::wstring(1, g_lastValidToggleKey) : L""; 
                     g_toggleHotkeyKey = g_lastValidToggleKey; 
                     InvalidateRect(field->hwnd, NULL, TRUE);
-                }
-                else if (id == 2) {
+                } else if (id == 2) {
                     field->text = g_lastValidSettingsKey ? std::wstring(1, g_lastValidSettingsKey) : L""; 
                     g_settingsHotkeyKey = g_lastValidSettingsKey; 
                     InvalidateRect(field->hwnd, NULL, TRUE);
-                }
-                else if (id == 3) {
+                } else if (id == 3) {
                     field->text = g_lastValidCycleKey ? std::wstring(1, g_lastValidCycleKey) : L""; 
                     g_cycleHotkeyKey = g_lastValidCycleKey; 
                     InvalidateRect(field->hwnd, NULL, TRUE);
-                }
-                else if (id == 4) {
-                    field->text = g_lastValidQuitKey ? std::wstring(1, g_lastValidQuitKey) : L"";
+                } else if (id == 4) {
+                    field->text = g_lastValidQuitKey ? std::wstring(1, g_lastValidQuitKey) : L""; 
                     g_quitHotkeyKey = g_lastValidQuitKey; 
                     InvalidateRect(field->hwnd, NULL, TRUE);
                 }
-            }
-            else {
+            } else {
                 if (id == 1) {
                     g_toggleHotkeyKey = key; 
                     g_lastValidToggleKey = key; 
@@ -1979,22 +1890,21 @@ void ApplyHotkeyFromField(EditField* field, int id) {
                     g_lastValidQuitKey = key; 
                 }
             }
-        }
-        else {
+        } else {
             if (id == 1) {
                 field->text = g_lastValidToggleKey ? std::wstring(1, g_lastValidToggleKey) : L""; 
                 g_toggleHotkeyKey = g_lastValidToggleKey; 
             }
             else if (id == 2) {
-                field->text = g_lastValidSettingsKey ? std::wstring(1, g_lastValidSettingsKey) : L"";
+                field->text = g_lastValidSettingsKey ? std::wstring(1, g_lastValidSettingsKey) : L""; 
                 g_settingsHotkeyKey = g_lastValidSettingsKey; 
-                }
+            }
             else if (id == 3) {
                 field->text = g_lastValidCycleKey ? std::wstring(1, g_lastValidCycleKey) : L""; 
                 g_cycleHotkeyKey = g_lastValidCycleKey; 
             }
-            else if (id == 4) { 
-                field->text = g_lastValidQuitKey ? std::wstring(1, g_lastValidQuitKey) : L"";
+            else if (id == 4) {
+                field->text = g_lastValidQuitKey ? std::wstring(1, g_lastValidQuitKey) : L""; 
                 g_quitHotkeyKey = g_lastValidQuitKey; 
             }
         }
@@ -2084,23 +1994,23 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
                     ApplyScaleFromField(field); 
                     g_settingsChanged = true; 
                     break;
-                case ID_HOTKEY_TOGGLE_DISPLAY: {
+                case ID_HOTKEY_TOGGLE_DISPLAY: { 
                     wchar_t old = g_toggleHotkeyKey; 
                     ApplyHotkeyFromField(field, 1); 
-                    if (old != g_toggleHotkeyKey) {
+                    if (old != g_toggleHotkeyKey) { 
                         RegisterHotkeys(); 
                         g_settingsChanged = true; 
                     }
                     break; 
                 }
-                case ID_HOTKEY_SETTINGS_DISPLAY: {
-                    wchar_t old = g_settingsHotkeyKey;
+                case ID_HOTKEY_SETTINGS_DISPLAY: { 
+                    wchar_t old = g_settingsHotkeyKey; 
                     ApplyHotkeyFromField(field, 2); 
                     if (old != g_settingsHotkeyKey) {
                         RegisterHotkeys(); 
                         g_settingsChanged = true; 
                     }
-                    break; 
+                    break;
                 }
                 case ID_HOTKEY_CYCLE_DISPLAY: {
                     wchar_t old = g_cycleHotkeyKey; 
@@ -2118,70 +2028,67 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
                         RegisterHotkeys(); 
                         g_settingsChanged = true; 
                     }
-                    break; }
+                    break;
+                }
             }
             InvalidateRect(hwnd, NULL, TRUE);
             return 0;
         case WM_KEYDOWN:
             switch (wParam) {
-                case VK_LEFT: 
-                if (field->selStart != field->cursorPos) {
-                    field->cursorPos = std::min(field->selStart, field->cursorPos); 
-                    field->selStart = field->cursorPos; 
-                    InvalidateRect(hwnd, NULL, TRUE); 
-                }
-                else if (field->cursorPos > 0) {
-                    field->cursorPos--; 
-                    field->selStart = field->cursorPos; 
-                    InvalidateRect(hwnd, NULL, TRUE); 
-                }
-                return 0;
-                case VK_RIGHT: 
-                if (field->selStart != field->cursorPos) {
-                    field->cursorPos = std::max(field->selStart, field->cursorPos); 
-                    field->selStart = field->cursorPos; 
-                    InvalidateRect(hwnd, NULL, TRUE); 
-                }
-                else if (field->cursorPos < (int)field->text.length()) {
-                    field->cursorPos++; 
-                    field->selStart = field->cursorPos; 
-                    InvalidateRect(hwnd, NULL, TRUE); 
-                }
-                return 0;
-                case VK_BACK: 
+                case VK_LEFT:
                     if (field->selStart != field->cursorPos) {
-                        int start = std::min(field->selStart, field->cursorPos); 
-                        int end = std::max(field->selStart, field->cursorPos); 
-                        field->text.erase(start, end - start); 
-                        field->cursorPos = start; 
-                        field->selStart = start; 
-                        InvalidateRect(hwnd, NULL, TRUE); 
-                    }
-                    else if (field->cursorPos > 0) {
-                        field->text.erase(field->cursorPos-1, 1); 
-                        field->cursorPos--; 
-                        field->selStart = field->cursorPos; 
-                        InvalidateRect(hwnd, NULL, TRUE); 
+                        field->cursorPos = std::min(field->selStart, field->cursorPos);
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    } else if (field->cursorPos > 0) {
+                        field->cursorPos--;
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
                     }
                     return 0;
-                case VK_DELETE: 
+                case VK_RIGHT:
                     if (field->selStart != field->cursorPos) {
-                        int start = std::min(field->selStart, field->cursorPos); 
-                        int end = std::max(field->selStart, field->cursorPos); 
-                        field->text.erase(start, end - start); 
-                        field->cursorPos = start; 
-                        field->selStart = start; 
-                        InvalidateRect(hwnd, NULL, TRUE); 
-                    }
-                    else if (field->cursorPos < (int)field->text.length()) {
-                        field->text.erase(field->cursorPos, 1); 
-                        field->selStart = field->cursorPos; 
-                        InvalidateRect(hwnd, NULL, TRUE); 
+                        field->cursorPos = std::max(field->selStart, field->cursorPos);
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    } else if (field->cursorPos < (int)field->text.length()) {
+                        field->cursorPos++;
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
                     }
                     return 0;
-                case VK_ESCAPE: 
-                case VK_RETURN: 
-                    SetFocus(GetParent(hwnd)); 
+                case VK_BACK:
+                    if (field->selStart != field->cursorPos) {
+                        int start = std::min(field->selStart, field->cursorPos);
+                        int end = std::max(field->selStart, field->cursorPos);
+                        field->text.erase(start, end - start);
+                        field->cursorPos = start;
+                        field->selStart = start;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    } else if (field->cursorPos > 0) {
+                        field->text.erase(field->cursorPos-1, 1);
+                        field->cursorPos--;
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    }
+                    return 0;
+                case VK_DELETE:
+                    if (field->selStart != field->cursorPos) {
+                        int start = std::min(field->selStart, field->cursorPos);
+                        int end = std::max(field->selStart, field->cursorPos);
+                        field->text.erase(start, end - start);
+                        field->cursorPos = start;
+                        field->selStart = start;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    } else if (field->cursorPos < (int)field->text.length()) {
+                        field->text.erase(field->cursorPos, 1);
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
+                    }
+                    return 0;
+                case VK_ESCAPE:
+                case VK_RETURN:
+                    SetFocus(GetParent(hwnd));
                     return 0;
             }
             break;
@@ -2191,24 +2098,22 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
                 return 0;
             if (field->id == ID_HOTKEY_TOGGLE_DISPLAY || field->id == ID_HOTKEY_SETTINGS_DISPLAY || field->id == ID_HOTKEY_CYCLE_DISPLAY || field->id == ID_HOTKEY_QUIT_DISPLAY) {
                 if (IsValidHotkeyChar(ch)) {
-                    field->text = std::wstring(1, std::towupper(ch)); 
-                    field->cursorPos = 1; 
-                    field->selStart = 1; 
-                    InvalidateRect(hwnd, NULL, TRUE); 
-                }
-                else if (ch == VK_BACK && !field->text.empty()) {
-                    field->text.clear(); 
-                    field->cursorPos = 0; 
-                    field->selStart = 0; 
-                    InvalidateRect(hwnd, NULL, TRUE); 
+                    field->text = std::wstring(1, std::towupper(ch));
+                    field->cursorPos = 1;
+                    field->selStart = 1;
+                    InvalidateRect(hwnd, NULL, TRUE);
+                } else if (ch == VK_BACK && !field->text.empty()) {
+                    field->text.clear();
+                    field->cursorPos = 0;
+                    field->selStart = 0;
+                    InvalidateRect(hwnd, NULL, TRUE);
                 }
                 return 0;
-            }
-            else {
+            } else {
                 bool allowed = false;
                 if (field->id == ID_OFFSET_X_DISPLAY || field->id == ID_OFFSET_Y_DISPLAY)
                     allowed = ((ch >= L'0' && ch <= L'9') || ch == L'-');
-                else if (field->id == ID_SIZE_DISPLAY) 
+                else if (field->id == ID_SIZE_DISPLAY)
                     allowed = ((ch >= L'0' && ch <= L'9') || ch == L'.');
                 if (!allowed) 
                     return 0;
@@ -2223,20 +2128,19 @@ LRESULT HandleOwnerDrawEdit(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, E
                     if (ch == L'-' && (field->cursorPos != 0 || field->text.find(L'-') != std::wstring::npos)) 
                         return 0;
                     if (field->text.length() < 5) {
-                        field->text.insert(field->cursorPos, 1, ch); 
-                        field->cursorPos++; 
-                        field->selStart = field->cursorPos; 
-                        InvalidateRect(hwnd, NULL, TRUE); 
+                        field->text.insert(field->cursorPos, 1, ch);
+                        field->cursorPos++;
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
                     }
-                }
-                else if (field->id == ID_SIZE_DISPLAY) {
+                } else if (field->id == ID_SIZE_DISPLAY) {
                     if (ch == L'.' && field->text.find(L'.') != std::wstring::npos) 
                         return 0;
                     if (field->text.length() < 4) {
-                        field->text.insert(field->cursorPos, 1, ch); 
-                        field->cursorPos++; 
-                        field->selStart = field->cursorPos; 
-                        InvalidateRect(hwnd, NULL, TRUE); 
+                        field->text.insert(field->cursorPos, 1, ch);
+                        field->cursorPos++;
+                        field->selStart = field->cursorPos;
+                        InvalidateRect(hwnd, NULL, TRUE);
                     }
                 }
                 return 0;
@@ -2278,7 +2182,7 @@ LRESULT CALLBACK ImageListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 if (g_hPopupWindow) {
                     std::wstring fullText = std::to_wstring(state.tooltipIndex + 1) + L". " + g_imageFiles[state.tooltipIndex].filename;
                     std::wstring* storedText = (std::wstring*)GetWindowLongPtr(g_hPopupWindow, GWLP_USERDATA);
-                    if (storedText)
+                    if (storedText) 
                         *storedText = fullText;
                     else {
                         storedText = new std::wstring(fullText);
@@ -2304,8 +2208,7 @@ LRESULT CALLBACK ImageListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                             if (size.cx <= MAX_WIDTH) {
                                 best = mid;
                                 low = mid + 1;
-                            } 
-                            else high = mid - 1;
+                            } else high = mid - 1;
                         }
                         std::wstring line = remaining.substr(0, best);
                         lines.push_back(line);
@@ -2319,9 +2222,9 @@ LRESULT CALLBACK ImageListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                     ReleaseDC(g_hPopupWindow, hdc);
                     int width = maxLineWidth + LEFT_RIGHT_PADDING;
                     int height = (int)lines.size() * LINE_HEIGHT + TOP_PADDING * 2;
-                    if (width < 60) 
+                    if (width < 60)
                         width = 60;
-                    if (height < 30) 
+                    if (height < 30)
                         height = 30;
                     POINT pt;
                     GetCursorPos(&pt);
@@ -2349,8 +2252,8 @@ LRESULT CALLBACK ImageListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         LRESULT result = HandleOwnerDrawListBox(hwnd, msg, wParam, lParam, ID_IMAGE_LIST);
         if (state.dragging) {
             if (state.tooltipTimer) {
-                KillTimer(hwnd, state.tooltipTimer);
-                state.tooltipTimer = 0;
+                KillTimer(hwnd, state.tooltipTimer); 
+                state.tooltipTimer = 0; 
             }
             if (state.tooltipActive) {
                 ShowWindow(g_hPopupWindow, SW_HIDE);
@@ -2366,21 +2269,20 @@ LRESULT CALLBACK ImageListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 state.tooltipActive = false;
             }
             if (state.tooltipTimer) {
-                KillTimer(hwnd, state.tooltipTimer);
-                state.tooltipTimer = 0;
+                KillTimer(hwnd, state.tooltipTimer); 
+                state.tooltipTimer = 0; 
             }
             state.tooltipIndex = newHover;
             if (newHover != -1 && newHover < (int)g_imageFiles.size()) {
                 HDC hdc = GetDC(hwnd);
                 HFONT hOldFont = (HFONT)SelectObject(hdc, g_hTabFont);
                 std::wstring fullText = std::to_wstring(newHover + 1) + L". " + g_imageFiles[newHover].filename;
-                RECT rc;
-                GetClientRect(hwnd, &rc);
+                RECT rc; GetClientRect(hwnd, &rc);
                 int maxWidth = rc.right - rc.left - 4;
                 bool needPopup = IsTextClipped(hdc, fullText, maxWidth);
                 SelectObject(hdc, hOldFont);
                 ReleaseDC(hwnd, hdc);
-                if (needPopup)
+                if (needPopup) 
                     state.tooltipTimer = SetTimer(hwnd, 1, 1000, NULL);
             }
         }
@@ -2392,7 +2294,7 @@ LRESULT CALLBACK ImageListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             state.tooltipTimer = 0;
         }
         if (state.tooltipActive) {
-            ShowWindow(g_hPopupWindow, SW_HIDE);
+            ShowWindow(g_hPopupWindow, SW_HIDE); 
             state.tooltipActive = false;
         }
         state.tooltipIndex = -1;
@@ -2400,8 +2302,8 @@ LRESULT CALLBACK ImageListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     }
     if (msg == WM_MOUSEWHEEL) {
         if (state.tooltipTimer) {
-            KillTimer(hwnd, state.tooltipTimer);
-            state.tooltipTimer = 0;
+            KillTimer(hwnd, state.tooltipTimer); 
+            state.tooltipTimer = 0; 
         }
         if (state.tooltipActive) {
             ShowWindow(g_hPopupWindow, SW_HIDE);
@@ -2413,8 +2315,7 @@ LRESULT CALLBACK ImageListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rc;
-        GetClientRect(hwnd, &rc);
+        RECT rc; GetClientRect(hwnd, &rc);
         HDC hdcMem = CreateCompatibleDC(hdc);
         HBITMAP hBitmap = CreateCompatibleBitmap(hdc, rc.right - rc.left, rc.bottom - rc.top);
         HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
@@ -2477,8 +2378,7 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                         if (size.cx <= maxWidth) {
                             best = mid;
                             low = mid + 1;
-                        } 
-                        else high = mid - 1;
+                        } else high = mid - 1;
                     }
                     std::wstring line = remaining.substr(0, best);
                     lines.push_back(line);
@@ -2509,8 +2409,7 @@ LRESULT CALLBACK MonitorListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rc;
-        GetClientRect(hwnd, &rc);
+        RECT rc; GetClientRect(hwnd, &rc);
         HDC hdcMem = CreateCompatibleDC(hdc);
         HBITMAP hBitmap = CreateCompatibleBitmap(hdc, rc.right - rc.left, rc.bottom - rc.top);
         HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
@@ -2606,7 +2505,7 @@ void AddImageToList(const std::wstring& filePath, bool saveToIni) {
         ShowOwnerDrawMessageBox(g_hwnd, L"Failed to load image", MB_OK);
         return;
     }
-    for (const auto& img : g_imageFiles)
+    for (const auto& img : g_imageFiles) 
         if (img.path == filePath) 
             return;
     ImageFile newImage;
@@ -2687,13 +2586,12 @@ void LoadAllSettingsFromIni() {
         if (IsValidHotkeyChar(key)) {
             g_toggleHotkeyKey = key; 
             g_lastValidToggleKey = key; 
-            UpdateEditFieldText(&g_hotkeyToggleField, std::wstring(1, key)); 
-        }
-        else {
+            UpdateEditFieldText(&g_hotkeyToggleField, std::wstring(1, key));
+        } else {
             g_toggleHotkeyKey = DEFAULT_TOGGLE_KEY; 
             g_lastValidToggleKey = DEFAULT_TOGGLE_KEY; 
-            UpdateEditFieldText(&g_hotkeyToggleField, std::wstring(1, DEFAULT_TOGGLE_KEY)); 
-            WritePrivateProfileStringW(L"Hotkeys", L"ToggleOverlayVisibility", std::wstring(1, DEFAULT_TOGGLE_KEY).c_str(), iniPath.c_str()); 
+            UpdateEditFieldText(&g_hotkeyToggleField, std::wstring(1, DEFAULT_TOGGLE_KEY));
+            WritePrivateProfileStringW(L"Hotkeys", L"ToggleOverlayVisibility", std::wstring(1, DEFAULT_TOGGLE_KEY).c_str(), iniPath.c_str());
         }
     }
     wchar_t settingsKeyStr[10];
@@ -2701,15 +2599,12 @@ void LoadAllSettingsFromIni() {
     if (wcslen(settingsKeyStr) > 0) {
         wchar_t key = std::towupper(settingsKeyStr[0]);
         if (IsValidHotkeyChar(key)) {
-            g_settingsHotkeyKey = key; 
-            g_lastValidSettingsKey = key; 
-            UpdateEditFieldText(&g_hotkeySettingsField, std::wstring(1, key)); 
-        }
-        else {
+            g_settingsHotkeyKey = key; g_lastValidSettingsKey = key; UpdateEditFieldText(&g_hotkeySettingsField, std::wstring(1, key));
+        } else {
             g_settingsHotkeyKey = DEFAULT_SETTINGS_KEY; 
             g_lastValidSettingsKey = DEFAULT_SETTINGS_KEY; 
-            UpdateEditFieldText(&g_hotkeySettingsField, std::wstring(1, DEFAULT_SETTINGS_KEY)); 
-            WritePrivateProfileStringW(L"Hotkeys", L"ToggleSettingsWindowVisibility", std::wstring(1, DEFAULT_SETTINGS_KEY).c_str(), iniPath.c_str()); 
+            UpdateEditFieldText(&g_hotkeySettingsField, std::wstring(1, DEFAULT_SETTINGS_KEY));
+            WritePrivateProfileStringW(L"Hotkeys", L"ToggleSettingsWindowVisibility", std::wstring(1, DEFAULT_SETTINGS_KEY).c_str(), iniPath.c_str());
         }
     }
     wchar_t cycleKeyStr[10];
@@ -2719,13 +2614,12 @@ void LoadAllSettingsFromIni() {
         if (IsValidHotkeyChar(key)) {
             g_cycleHotkeyKey = key; 
             g_lastValidCycleKey = key; 
-            UpdateEditFieldText(&g_hotkeyCycleField, std::wstring(1, key)); 
-        }
-        else {
+            UpdateEditFieldText(&g_hotkeyCycleField, std::wstring(1, key));
+        } else {
             g_cycleHotkeyKey = DEFAULT_CYCLE_KEY; 
             g_lastValidCycleKey = DEFAULT_CYCLE_KEY; 
-            UpdateEditFieldText(&g_hotkeyCycleField, std::wstring(1, DEFAULT_CYCLE_KEY)); 
-            WritePrivateProfileStringW(L"Hotkeys", L"SwitchToNextImageFromList", std::wstring(1, DEFAULT_CYCLE_KEY).c_str(), iniPath.c_str()); 
+            UpdateEditFieldText(&g_hotkeyCycleField, std::wstring(1, DEFAULT_CYCLE_KEY));
+            WritePrivateProfileStringW(L"Hotkeys", L"SwitchToNextImageFromList", std::wstring(1, DEFAULT_CYCLE_KEY).c_str(), iniPath.c_str());
         }
     }
     wchar_t reverseStr[10];
@@ -2738,13 +2632,12 @@ void LoadAllSettingsFromIni() {
         if (IsValidHotkeyChar(key)) {
             g_quitHotkeyKey = key; 
             g_lastValidQuitKey = key; 
-            UpdateEditFieldText(&g_hotkeyQuitField, std::wstring(1, key)); 
-        }
-        else {
+            UpdateEditFieldText(&g_hotkeyQuitField, std::wstring(1, key));
+        } else {
             g_quitHotkeyKey = DEFAULT_QUIT_KEY; 
             g_lastValidQuitKey = DEFAULT_QUIT_KEY; 
-            UpdateEditFieldText(&g_hotkeyQuitField, std::wstring(1, DEFAULT_QUIT_KEY)); 
-            WritePrivateProfileStringW(L"Hotkeys", L"Quit", std::wstring(1, DEFAULT_QUIT_KEY).c_str(), iniPath.c_str()); 
+            UpdateEditFieldText(&g_hotkeyQuitField, std::wstring(1, DEFAULT_QUIT_KEY));
+            WritePrivateProfileStringW(L"Hotkeys", L"Quit", std::wstring(1, DEFAULT_QUIT_KEY).c_str(), iniPath.c_str());
         }
     }
     wchar_t windowXStr[32], windowYStr[32];
@@ -2767,9 +2660,9 @@ void LoadAllSettingsFromIni() {
     if (g_currentImageIndex != -1) {
         SetCurrentImageSettings(g_currentImageIndex);
         int visibleItems = VISIBLE_ITEMS_IMAGES;
-        if (g_currentImageIndex < g_imageListScrollPos)
+        if (g_currentImageIndex < g_imageListScrollPos) 
             g_imageListScrollPos = g_currentImageIndex;
-        else if (g_currentImageIndex >= g_imageListScrollPos + visibleItems)
+        else if (g_currentImageIndex >= g_imageListScrollPos + visibleItems) 
             g_imageListScrollPos = g_currentImageIndex - visibleItems + 1;
     }
 }
@@ -2786,8 +2679,7 @@ void SaveAllSettingsToIni() {
         GetWindowRect(g_hwnd, &wr);
         content += L"WindowX=" + std::to_wstring(wr.left) + L"\r\n";
         content += L"WindowY=" + std::to_wstring(wr.top) + L"\r\n";
-    }
-    else {
+    } else {
         content += L"WindowX=" + std::to_wstring(g_windowX) + L"\r\n";
         content += L"WindowY=" + std::to_wstring(g_windowY) + L"\r\n";
     }
@@ -2802,9 +2694,8 @@ void SaveAllSettingsToIni() {
     content += L"[Images List]\r\n";
     content += L"Count=" + std::to_wstring(g_imageFiles.size()) + L"\r\n";
     content += L"LastDisplayed=" + g_lastDisplayedImage + L"\r\n";
-    for (size_t i = 0; i < g_imageFiles.size(); ++i) {
+    for (size_t i = 0; i < g_imageFiles.size(); ++i)
         content += L"Image" + std::to_wstring(i) + L"=" + g_imageFiles[i].path + L"\r\n";
-    }
     content += L"\r\n";
     for (size_t i = 0; i < g_imageFiles.size(); ++i) {
         content += L"[Location & Size " + std::to_wstring(i) + L"]\r\n";
@@ -2825,29 +2716,62 @@ void SaveAllSettingsToIni() {
         CloseHandle(hFile);
     }
 }
-void CorrectOffsetValues() {
-    std::shared_lock<std::shared_mutex> lock(g_monitorMutex);
-    if (g_selectedMonitor >= 0 && g_selectedMonitor < (int)g_monitors.size()) {
-        const auto& m = g_monitors[g_selectedMonitor];
-        int maxX = (m.rect.right - m.rect.left) / 2;
-        int maxY = (m.rect.bottom - m.rect.top) / 2;
-        if (g_offsetX > maxX) 
-            g_offsetX = maxX;
-        if (g_offsetX < -maxX) 
-            g_offsetX = -maxX;
-        if (g_offsetY > maxY) 
-            g_offsetY = maxY;
-        if (g_offsetY < -maxY) 
-            g_offsetY = -maxY;
-        UpdateEditFieldText(&g_offsetXField, std::to_wstring(g_offsetX));
-        UpdateEditFieldText(&g_offsetYField, std::to_wstring(g_offsetY));
-        if (g_hOffsetXDisplay) 
-            InvalidateRect(g_hOffsetXDisplay, NULL, TRUE);
-        if (g_hOffsetYDisplay) 
-            InvalidateRect(g_hOffsetYDisplay, NULL, TRUE);
+void EnsureRenderBuffer(int width, int height) {
+    if (width <= 0 || height <= 0) 
+        return;
+    std::lock_guard<std::mutex> lock(g_renderBuffer.mutex);
+    if (g_renderBuffer.width == width && g_renderBuffer.height == height && g_renderBuffer.hdcMem != NULL)
+        return;
+    if (g_renderBuffer.hdcMem) {
+        if (g_renderBuffer.hOldBitmap)
+            SelectObject(g_renderBuffer.hdcMem, g_renderBuffer.hOldBitmap);
+        if (g_renderBuffer.hBitmap)
+            DeleteObject(g_renderBuffer.hBitmap);
+        DeleteDC(g_renderBuffer.hdcMem);
     }
-    if (g_currentOverlay) 
-        UpdateOverlayPosition();
+    HDC hdcScreen = GetDC(NULL);
+    g_renderBuffer.hdcMem = CreateCompatibleDC(hdcScreen);
+    g_renderBuffer.hBitmap = CreateCompatibleBitmap(hdcScreen, width, height);
+    g_renderBuffer.hOldBitmap = (HBITMAP)SelectObject(g_renderBuffer.hdcMem, g_renderBuffer.hBitmap);
+    g_renderBuffer.width = width;
+    g_renderBuffer.height = height;
+    g_renderBuffer.valid = false;
+    ReleaseDC(NULL, hdcScreen);
+}
+void CorrectOffsetValues() {
+    int monX = 0, monY = 0, monW = 0, monH = 0;
+    {
+        std::shared_lock<std::shared_mutex> lock(g_monitorMutex);
+        if (g_selectedMonitor >= 0 && g_selectedMonitor < (int)g_monitors.size()) {
+            const auto& m = g_monitors[g_selectedMonitor];
+            int maxX = (m.rect.right - m.rect.left) / 2;
+            int maxY = (m.rect.bottom - m.rect.top) / 2;
+            if (g_offsetX > maxX)
+                g_offsetX = maxX;
+            if (g_offsetX < -maxX)
+                g_offsetX = -maxX;
+            if (g_offsetY > maxY)
+                g_offsetY = maxY;
+            if (g_offsetY < -maxY)
+                g_offsetY = -maxY;
+            UpdateEditFieldText(&g_offsetXField, std::to_wstring(g_offsetX));
+            UpdateEditFieldText(&g_offsetYField, std::to_wstring(g_offsetY));
+            if (g_hOffsetXDisplay) 
+                InvalidateRect(g_hOffsetXDisplay, NULL, TRUE);
+            if (g_hOffsetYDisplay) 
+                InvalidateRect(g_hOffsetYDisplay, NULL, TRUE);
+            monX = m.rect.left;
+            monY = m.rect.top;
+            monW = m.rect.right - m.rect.left;
+            monH = m.rect.bottom - m.rect.top;
+        } else {
+            monW = GetSystemMetrics(SM_CXSCREEN);
+            monH = GetSystemMetrics(SM_CYSCREEN);
+        }
+    }
+    if (g_currentOverlay) {
+        UpdateOverlayPosition(monX, monY, monW, monH);
+    }
     if (g_currentImageIndex != -1) 
         SaveCurrentImageSettings();
 }
@@ -2858,14 +2782,19 @@ void CorrectScaleValue() {
     if (scale > 2.0f) 
         scale = 2.0f;
     g_imageScale.store(scale, std::memory_order_relaxed);
-    std::wstringstream ss; 
-    ss << std::fixed << std::setprecision(2) << scale;
+    std::wstringstream ss; ss << std::fixed << std::setprecision(2) << scale;
     UpdateEditFieldText(&g_sizeField, ss.str());
     if (g_hSizeDisplay) 
         InvalidateRect(g_hSizeDisplay, NULL, TRUE);
     UpdateScaleControls();
-    if (g_currentOverlay) 
+    if (g_animatedGIFShared) {
+        g_animatedGIFShared->ClearCache();
+        InvalidateRenderBuffer();
         RenderOverlay();
+    } else if (g_cachedBitmapShared) {
+        InvalidateRenderBuffer();
+        RenderOverlay();
+    }
     if (g_currentImageIndex != -1) 
         SaveCurrentImageSettings();
 }
@@ -2875,36 +2804,53 @@ void SafeGdiplusShutdown() {
         g_gdiplusToken = 0;
     }
 }
-void UpdateOverlayPosition() {
-    if (!g_currentOverlay) 
+void UpdateOverlayPosition(int monitorX, int monitorY, int monitorWidth, int monitorHeight) {
+    if (!g_currentOverlay)
         return;
     int windowWidth = 2 * g_originalImageWidth;
     int windowHeight = 2 * g_originalImageHeight;
-    int x = 0, y = 0;
+    int x = monitorX + (monitorWidth - windowWidth) / 2 + g_offsetX;
+    int y = monitorY + (monitorHeight - windowHeight) / 2 + g_offsetY;
+    SetWindowPos(g_currentOverlay, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    RECT rc;
+    GetWindowRect(g_currentOverlay, &rc);
+    g_overlayX = rc.left;
+    g_overlayY = rc.top;
+}
+void UpdateOverlayPosition() {
+    if (!g_currentOverlay) 
+        return;
+    int monitorX=0, monitorY=0, monitorWidth=0, monitorHeight=0;
     {
         std::shared_lock<std::shared_mutex> lock(g_monitorMutex);
         if (g_selectedMonitor >= 0 && g_selectedMonitor < (int)g_monitors.size()) {
             const auto& m = g_monitors[g_selectedMonitor];
-            int sw = m.rect.right - m.rect.left;
-            int sh = m.rect.bottom - m.rect.top;
-            x = m.rect.left + (sw - windowWidth) / 2 + g_offsetX;
-            y = m.rect.top + (sh - windowHeight) / 2 + g_offsetY;
-        }
-        else {
-            int sw = GetSystemMetrics(SM_CXSCREEN);
-            int sh = GetSystemMetrics(SM_CYSCREEN);
-            x = (sw - windowWidth) / 2 + g_offsetX;
-            y = (sh - windowHeight) / 2 + g_offsetY;
+            monitorX = m.rect.left;
+            monitorY = m.rect.top;
+            monitorWidth = m.rect.right - m.rect.left;
+            monitorHeight = m.rect.bottom - m.rect.top;
+        } else {
+            monitorWidth = GetSystemMetrics(SM_CXSCREEN);
+            monitorHeight = GetSystemMetrics(SM_CYSCREEN);
         }
     }
-    RECT currentRect;
-    GetWindowRect(g_currentOverlay, &currentRect);
-    if (currentRect.left == x && currentRect.top == y) 
-        return;
-    SetWindowPos(g_currentOverlay, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    GetWindowRect(g_currentOverlay, &currentRect);
-    g_overlayX = currentRect.left;
-    g_overlayY = currentRect.top;
+    UpdateOverlayPosition(monitorX, monitorY, monitorWidth, monitorHeight);
+}
+void FreeRenderBuffer() {
+    std::lock_guard<std::mutex> lock(g_renderBuffer.mutex);
+    if (g_renderBuffer.hdcMem) {
+        if (g_renderBuffer.hOldBitmap)
+            SelectObject(g_renderBuffer.hdcMem, g_renderBuffer.hOldBitmap);
+        if (g_renderBuffer.hBitmap)
+            DeleteObject(g_renderBuffer.hBitmap);
+        DeleteDC(g_renderBuffer.hdcMem);
+        g_renderBuffer.hdcMem = NULL;
+        g_renderBuffer.hBitmap = NULL;
+        g_renderBuffer.hOldBitmap = NULL;
+        g_renderBuffer.width = 0;
+        g_renderBuffer.height = 0;
+        g_renderBuffer.valid = false;
+    }
 }
 void RenderOverlayInThread() {
     HANDLE hEvent = g_renderEvent;
@@ -2934,55 +2880,63 @@ void RenderOverlayInThread() {
             continue;
         int windowWidth = 2 * origWidth;
         int windowHeight = 2 * origHeight;
+        if (windowWidth <= 0 || windowHeight <= 0) 
+            continue;
         int drawWidth = (int)(origWidth * scale);
         int drawHeight = (int)(origHeight * scale);
         int drawX = (windowWidth - drawWidth) / 2;
         int drawY = (windowHeight - drawHeight) / 2;
-        HDC hdcScreen = GetDC(NULL);
-        if (!hdcScreen) 
+        if (bitmapCopy && !gifCopy) {
+            bool needRender = false;
+            {
+                std::lock_guard<std::mutex> lock(g_renderBuffer.mutex);
+                if (!g_renderBuffer.valid.load(std::memory_order_relaxed) ||
+                    g_renderBuffer.width != windowWidth ||
+                    g_renderBuffer.height != windowHeight) {
+                    needRender = true;
+                }
+            }
+            if (needRender) {
+                RenderStaticToBufferInternal();
+            }
+            HDC hdcScreen = GetDC(NULL);
+            if (hdcScreen) {
+                BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+                POINT ptPos = {overlayX, overlayY};
+                SIZE sizeWnd = {windowWidth, windowHeight};
+                POINT ptSrc = {0, 0};
+                UpdateLayeredWindow(hwnd, hdcScreen, &ptPos, &sizeWnd, g_renderBuffer.hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
+                ReleaseDC(NULL, hdcScreen);
+            }
             continue;
-        HDC hdcMem = CreateCompatibleDC(hdcScreen);
-        if (!hdcMem) {
-            ReleaseDC(NULL, hdcScreen); 
-            continue; 
         }
-        HBITMAP hBitmap = CreateCompatibleBitmap(hdcScreen, windowWidth, windowHeight);
-        if (!hBitmap) {
-            DeleteDC(hdcMem); 
-            ReleaseDC(NULL, hdcScreen); 
-            continue; 
-        }
-        HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
-        Graphics graphics(hdcMem);
-        graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
-        SolidBrush clearBrush(Color(0,0,0,0));
-        graphics.FillRectangle(&clearBrush, 0, 0, windowWidth, windowHeight);
-        bool success = false;
-        if (gifCopy && gifCopy->IsInitialized()) {
-            int frameIdx = gifCopy->GetCurrentFrameIndex();
-            auto scaledFrame = gifCopy->GetScaledFrame(frameIdx, scale, drawWidth, drawHeight);
-            if (scaledFrame) {
-                Rect destRect(drawX, drawY, drawWidth, drawHeight);
-                graphics.DrawImage(scaledFrame.get(), destRect);
-                success = true;
+        EnsureRenderBuffer(windowWidth, windowHeight);
+        {
+            std::lock_guard<std::mutex> lock(g_renderBuffer.mutex);
+            Graphics graphics(g_renderBuffer.hdcMem);
+            graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+            graphics.SetCompositingMode(CompositingModeSourceCopy);
+            SolidBrush clearBrush(Color(0,0,0,0));
+            graphics.FillRectangle(&clearBrush, 0, 0, windowWidth, windowHeight);
+            graphics.SetCompositingMode(CompositingModeSourceOver);
+            if (gifCopy && gifCopy->IsInitialized()) {
+                int frameIdx = gifCopy->GetCurrentFrameIndex();
+                auto scaledFrame = gifCopy->GetScaledFrame(frameIdx, scale, drawWidth, drawHeight);
+                if (scaledFrame) {
+                    Rect destRect(drawX, drawY, drawWidth, drawHeight);
+                    graphics.DrawImage(scaledFrame.get(), destRect);
+                }
+            }
+            HDC hdcScreen = GetDC(NULL);
+            if (hdcScreen) {
+                BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+                POINT ptPos = {overlayX, overlayY};
+                SIZE sizeWnd = {windowWidth, windowHeight};
+                POINT ptSrc = {0, 0};
+                UpdateLayeredWindow(hwnd, hdcScreen, &ptPos, &sizeWnd, g_renderBuffer.hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
+                ReleaseDC(NULL, hdcScreen);
             }
         }
-        else if (bitmapCopy) {
-            Rect destRect(drawX, drawY, drawWidth, drawHeight);
-            graphics.DrawImage(bitmapCopy.get(), destRect);
-            success = true;
-        }
-        if (success) {
-            BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-            POINT ptPos = {overlayX, overlayY};
-            SIZE sizeWnd = {windowWidth, windowHeight};
-            POINT ptSrc = {0, 0};
-            UpdateLayeredWindow(hwnd, hdcScreen, &ptPos, &sizeWnd, hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
-        }
-        SelectObject(hdcMem, hOldBitmap);
-        DeleteObject(hBitmap);
-        DeleteDC(hdcMem);
-        ReleaseDC(NULL, hdcScreen);
     }
 }
 void StartRenderThread() {
@@ -3001,8 +2955,8 @@ void StopRenderThread() {
             g_renderThread.join();
         g_renderThreadRunning = false;
         if (g_renderEvent) {
-            CloseHandle(g_renderEvent); 
-            g_renderEvent = NULL; 
+            CloseHandle(g_renderEvent);
+            g_renderEvent = NULL;
         }
     }
 }
@@ -3010,60 +2964,60 @@ void RenderOverlay() {
     SetEvent(g_renderEvent);
 }
 void ApplyScaleChange() {
-    if (g_animatedGIFShared) 
+    if (g_animatedGIFShared) {
         g_animatedGIFShared->ClearCache();
-    RenderOverlay();
+        InvalidateRenderBuffer();
+        RenderOverlay();
+    } else if (g_cachedBitmapShared) {
+        InvalidateRenderBuffer();
+        RenderOverlay();
+    }
 }
 LRESULT CALLBACK OverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_TIMER:
             if (wParam == ID_ANIMATION_TIMER) {
                 std::shared_ptr<AnimatedGIF> gif;
-                {
-                std::lock_guard<std::mutex> lock(g_renderDataMutex); 
-                gif = g_animatedGIFShared; 
+                { 
+                    std::lock_guard<std::mutex> lock(g_renderDataMutex); 
+                    gif = g_animatedGIFShared; 
                 }
                 if (gif && gif->IsInitialized()) {
                     gif->NextFrame(); 
-                    RenderOverlay(); 
+                    RenderOverlay();
                 }
             }
             return 0;
-        case WM_MOVE: 
+        case WM_MOVE:
         case WM_WINDOWPOSCHANGED: {
-            RECT rc; 
-            GetWindowRect(hwnd, &rc);
+            RECT rc; GetWindowRect(hwnd, &rc);
             g_overlayX = rc.left; 
             g_overlayY = rc.top;
             return 0;
         }
-        case WM_DESTROY: 
+        case WM_DESTROY:
             return 0;
     }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 void RemoveImageFromList(int index) {
-    if (index < 0 || index >= (int)g_imageFiles.size()) 
-        return;
+    if (index < 0 || index >= (int)g_imageFiles.size()) return;
     if (index == g_currentImageIndex) {
-        if (g_animatedGIFShared) 
-            g_animatedGIFShared->StopAnimation();
-        if (g_currentOverlay) 
-            DestroyWindow(g_currentOverlay);
+        if (g_animatedGIFShared) g_animatedGIFShared->StopAnimation();
+        if (g_currentOverlay) DestroyWindow(g_currentOverlay);
         g_currentOverlay = NULL;
         g_currentOverlayAtomic = nullptr;
-        {
-        std::lock_guard<std::mutex> lock(g_renderDataMutex); 
-        g_cachedBitmapShared.reset(); 
-        g_animatedGIFShared.reset(); 
-        g_originalImageWidth = 0; 
-        g_originalImageHeight = 0; 
+        { 
+            std::lock_guard<std::mutex> lock(g_renderDataMutex); 
+            g_cachedBitmapShared.reset();
+            g_animatedGIFShared.reset(); 
+            g_originalImageWidth = 0; 
+            g_originalImageHeight = 0;
         }
         StopRenderThread();
         g_currentImageIndex = -1;
         g_lastDisplayedImage.clear();
-    }
-    else if (index < g_currentImageIndex)
+    } else if (index < g_currentImageIndex) 
         g_currentImageIndex--;
     g_imageFiles.erase(g_imageFiles.begin() + index);
     if (g_imageListSelected >= index) {
@@ -3076,30 +3030,30 @@ void RemoveImageFromList(int index) {
         int total = (int)g_imageFiles.size();
         int visible = VISIBLE_ITEMS_IMAGES;
         int maxScroll = std::max(0, total - visible);
-        if (g_currentImageIndex < g_imageListScrollPos)
+        if (g_currentImageIndex < g_imageListScrollPos) 
             g_imageListScrollPos = g_currentImageIndex;
-        else if (g_currentImageIndex >= g_imageListScrollPos + visible)
+        else if (g_currentImageIndex >= g_imageListScrollPos + visible) 
             g_imageListScrollPos = g_currentImageIndex - visible + 1;
         if (g_imageListScrollPos > maxScroll) 
             g_imageListScrollPos = maxScroll;
         if (g_imageListScrollPos < 0) 
             g_imageListScrollPos = 0;
-    } 
-    else {
+    } else {
         g_imageListSelected = -1;
         if (g_imageFiles.empty()) 
             g_imageListScrollPos = 0;
     }
     if (g_lastSuccessfulImageIndex != -1) {
-        if (index < g_lastSuccessfulImageIndex)
+        if (index < g_lastSuccessfulImageIndex) 
             g_lastSuccessfulImageIndex--;
-        else if (index == g_lastSuccessfulImageIndex)
+        else if (index == g_lastSuccessfulImageIndex) 
             g_lastSuccessfulImageIndex = -1;
     }
     if (g_hImageList) 
         InvalidateRect(g_hImageList, NULL, TRUE);
     g_settingsChanged = true;
 }
+
 void CreateOverlayWindow(int imageIndex, bool saveToIni) {
     if (imageIndex < 0 || imageIndex >= (int)g_imageFiles.size()) 
         return;
@@ -3119,26 +3073,24 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
                 g_currentImageIndex = g_lastSuccessfulImageIndex;
                 SetCurrentImageSettings(g_currentImageIndex);
                 CreateOverlayWindow(g_currentImageIndex, true);
-            } 
-            else if (wasCurrent) {
+            } else if (wasCurrent) {
                 if (g_currentOverlay) {
-                    if (g_animatedGIFShared) 
-                        g_animatedGIFShared->StopAnimation();
+                    if (g_animatedGIFShared) g_animatedGIFShared->StopAnimation();
                     DestroyWindow(g_currentOverlay);
                     g_currentOverlay = NULL;
                     g_currentOverlayAtomic = nullptr;
-                    {
-                        std::lock_guard<std::mutex> lock(g_renderDataMutex);
-                        g_cachedBitmapShared.reset();
-                        g_animatedGIFShared.reset();
-                        g_originalImageWidth = 0;
-                        g_originalImageHeight = 0;
+                    { 
+                        std::lock_guard<std::mutex> lock(g_renderDataMutex); 
+                        g_cachedBitmapShared.reset(); g_animatedGIFShared.reset(); 
+                        g_originalImageWidth = 0; 
+                        g_originalImageHeight = 0; 
                     }
                     StopRenderThread();
                 }
                 g_currentImageIndex = -1;
                 g_imageListSelected = -1;
-                if (g_hImageList) InvalidateRect(g_hImageList, NULL, TRUE);
+                if (g_hImageList) 
+                InvalidateRect(g_hImageList, NULL, TRUE);
             }
         }
         return;
@@ -3150,12 +3102,12 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
         DestroyWindow(g_currentOverlay);
         g_currentOverlay = NULL;
         g_currentOverlayAtomic = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(g_renderDataMutex);
-            g_cachedBitmapShared.reset();
-            g_animatedGIFShared.reset();
-            g_originalImageWidth = 0;
-            g_originalImageHeight = 0;
+        { 
+            std::lock_guard<std::mutex> lock(g_renderDataMutex); 
+            g_cachedBitmapShared.reset(); 
+            g_animatedGIFShared.reset(); 
+            g_originalImageWidth = 0; 
+            g_originalImageHeight = 0; 
         }
         StopRenderThread();
     }
@@ -3163,7 +3115,8 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
     size_t dotPos = imagePath.find_last_of(L".");
     if (dotPos != std::wstring::npos) {
         std::wstring ext = imagePath.substr(dotPos + 1);
-        for (wchar_t& c : ext) c = towlower(c);
+        for (wchar_t& c : ext) 
+            c = towlower(c);
         isGif = (ext == L"gif");
     }
     if (isGif) {
@@ -3183,20 +3136,19 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
                     g_currentImageIndex = g_lastSuccessfulImageIndex;
                     SetCurrentImageSettings(g_currentImageIndex);
                     CreateOverlayWindow(g_currentImageIndex, true);
-                } 
-                else if (wasCurrent) {
+                } else if (wasCurrent) {
                     if (g_currentOverlay) {
                         if (g_animatedGIFShared) 
                             g_animatedGIFShared->StopAnimation();
                         DestroyWindow(g_currentOverlay);
                         g_currentOverlay = NULL;
                         g_currentOverlayAtomic = nullptr;
-                        {
-                            std::lock_guard<std::mutex> lock(g_renderDataMutex);
-                            g_cachedBitmapShared.reset();
-                            g_animatedGIFShared.reset();
-                            g_originalImageWidth = 0;
-                            g_originalImageHeight = 0;
+                        { 
+                            std::lock_guard<std::mutex> lock(g_renderDataMutex); 
+                            g_cachedBitmapShared.reset(); 
+                            g_animatedGIFShared.reset(); 
+                            g_originalImageWidth = 0; 
+                            g_originalImageHeight = 0; 
                         }
                         StopRenderThread();
                     }
@@ -3217,8 +3169,7 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
             g_lastDisplayedImage = imagePath;
         }
         SetCurrentImageSettings(imageIndex);
-    } 
-    else {
+    } else {
         auto bitmap = std::make_shared<Bitmap>(imagePath.c_str());
         if (!bitmap || bitmap->GetLastStatus() != Ok) {
             if (!IsWindowVisible(g_hwnd) || IsIconic(g_hwnd)) {
@@ -3235,10 +3186,9 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
                     g_currentImageIndex = g_lastSuccessfulImageIndex;
                     SetCurrentImageSettings(g_currentImageIndex);
                     CreateOverlayWindow(g_currentImageIndex, true);
-                } 
-                else if (wasCurrent) {
+                } else if (wasCurrent) {
                     if (g_currentOverlay) {
-                        if (g_animatedGIFShared) 
+                        if (g_animatedGIFShared)
                             g_animatedGIFShared->StopAnimation();
                         DestroyWindow(g_currentOverlay);
                         g_currentOverlay = NULL;
@@ -3254,7 +3204,7 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
                     }
                     g_currentImageIndex = -1;
                     g_imageListSelected = -1;
-                    if (g_hImageList) 
+                    if (g_hImageList)
                         InvalidateRect(g_hImageList, NULL, TRUE);
                 }
             }
@@ -3277,8 +3227,7 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
         if (g_selectedMonitor != g_currentMonitor) {
             UpdateOverlayPosition();
             g_currentMonitor = g_selectedMonitor;
-        } 
-        else {
+        } else {
             RECT cr;
             GetWindowRect(g_currentOverlay, &cr);
             int cw = cr.right - cr.left, ch = cr.bottom - cr.top;
@@ -3298,8 +3247,7 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
                 x = m.rect.left + (sw - windowWidth) / 2 + g_offsetX;
                 y = m.rect.top + (sh - windowHeight) / 2 + g_offsetY;
                 g_currentMonitor = g_selectedMonitor;
-            } 
-            else {
+            } else {
                 int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
                 x = (sw - windowWidth) / 2 + g_offsetX;
                 y = (sh - windowHeight) / 2 + g_offsetY;
@@ -3328,15 +3276,15 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
     }
     StartRenderThread();
     std::shared_ptr<AnimatedGIF> gif;
-    {
-        std::lock_guard<std::mutex> lock(g_renderDataMutex);
-        gif = g_animatedGIFShared;
+    { 
+        std::lock_guard<std::mutex> lock(g_renderDataMutex); 
+        gif = g_animatedGIFShared; 
     }
-    if (gif && gif->IsInitialized() && gif->IsAnimated())
+    if (gif && gif->IsInitialized() && gif->IsAnimated()) 
         gif->StartAnimation(g_currentOverlay);
     RenderOverlay();
     g_lastSuccessfulImageIndex = g_currentImageIndex;
-    if (g_hImageList) 
+    if (g_hImageList)
         InvalidateRect(g_hImageList, NULL, TRUE);
     if (saveToIni)
         g_settingsChanged = true;
@@ -3369,6 +3317,7 @@ void UpdateMonitorSelection() {
     if (g_hMonitorList) 
         InvalidateRect(g_hMonitorList, NULL, TRUE);
 }
+
 void UpdateOffsetEditControls() {
     UpdateEditFieldText(&g_offsetXField, std::to_wstring(g_offsetX));
     UpdateEditFieldText(&g_offsetYField, std::to_wstring(g_offsetY));
@@ -3385,8 +3334,7 @@ void UpdateScaleControls() {
         sliderValue = 200;
     if (g_hSizeSlider) 
         InvalidateRect(g_hSizeSlider, NULL, TRUE);
-    std::wstringstream ss; 
-    ss << std::fixed << std::setprecision(2) << g_imageScale.load();
+    std::wstringstream ss; ss << std::fixed << std::setprecision(2) << g_imageScale.load();
     UpdateEditFieldText(&g_sizeField, ss.str());
     if (g_hSizeDisplay) 
         InvalidateRect(g_hSizeDisplay, NULL, TRUE);
@@ -3434,22 +3382,21 @@ void ToggleHideOverlay() {
         if (!g_hideOverlay) {
             SetWindowPos(g_currentOverlay, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             std::shared_ptr<AnimatedGIF> gif;
-            {
-            std::lock_guard<std::mutex> lock(g_renderDataMutex); 
-            gif = g_animatedGIFShared; 
+            { 
+                std::lock_guard<std::mutex> lock(g_renderDataMutex); 
+                gif = g_animatedGIFShared; 
             }
             if (gif && gif->IsInitialized() && gif->IsAnimated()) 
                 gif->StartAnimation(g_currentOverlay);
             RenderOverlay();
-        }
-        else {
+        } else {
             std::shared_ptr<AnimatedGIF> gif;
             {
-            std::lock_guard<std::mutex> lock(g_renderDataMutex); 
-            gif = g_animatedGIFShared; 
+                std::lock_guard<std::mutex> lock(g_renderDataMutex);
+                gif = g_animatedGIFShared;
             }
             if (gif) 
-            gif->StopAnimation();
+                gif->StopAnimation();
         }
     }
     UpdateAllButtons();
@@ -3461,28 +3408,24 @@ void ToggleSettingsWindow() {
         SetWindowPos(g_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
         ForceForegroundWindow(g_hwnd);
         g_windowVisible = true;
-    } 
-    else {
+    } else {
         if (IsIconic(g_hwnd)) {
             ShowWindow(g_hwnd, SW_RESTORE);
             SetWindowPos(g_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
             ForceForegroundWindow(g_hwnd);
             g_windowVisible = true;
-        } 
-        else {
+        } else {
             if (GetForegroundWindow() == g_hwnd) {
                 ShowWindow(g_hwnd, SW_HIDE);
                 g_windowVisible = false;
-            } 
-            else ForceForegroundWindow(g_hwnd);
+            } else ForceForegroundWindow(g_hwnd);
         }
     }
 }
 void ToggleReverseDirection() {
     g_reverseDirection = !g_reverseDirection;
-    if 
-    (g_hReverseDirectionCheckbox) 
-    InvalidateRect(g_hReverseDirectionCheckbox, NULL, TRUE);
+    if (g_hReverseDirectionCheckbox) 
+        InvalidateRect(g_hReverseDirectionCheckbox, NULL, TRUE);
     g_settingsChanged = true;
 }
 void CycleImageSelection() {
@@ -3490,37 +3433,32 @@ void CycleImageSelection() {
         return;
     int count = (int)g_imageFiles.size();
     int newIndex;
-    if (g_currentImageIndex == -1)
-        newIndex = g_reverseDirection ? count - 1 : 0;
+    if (g_currentImageIndex == -1) newIndex = g_reverseDirection ? count - 1 : 0;
     else {
         if (g_reverseDirection) {
             newIndex = g_currentImageIndex - 1;
             if (newIndex < 0) 
                 newIndex = count - 1;
-        } 
-        else {
+        } else {
             newIndex = g_currentImageIndex + 1;
             if (newIndex >= count) 
                 newIndex = 0;
         }
     }
     int visibleItems = VISIBLE_ITEMS_IMAGES;
-    if (newIndex < g_imageListScrollPos)
+    if (newIndex < g_imageListScrollPos) 
         g_imageListScrollPos = newIndex;
-    else if (newIndex >= g_imageListScrollPos + visibleItems)
+    else if (newIndex >= g_imageListScrollPos + visibleItems) 
         g_imageListScrollPos = newIndex - visibleItems + 1;
     CreateOverlayWindow(newIndex, true);
 }
 LRESULT HandleHotkey(WPARAM wParam) {
     switch (wParam) {
-        case 1: 
-            ToggleHideOverlay(); 
+        case 1: ToggleHideOverlay(); 
             return 0;
-        case 2: 
-            ToggleSettingsWindow();
+        case 2: ToggleSettingsWindow(); 
             return 0;
-        case 3: 
-            CycleImageSelection(); 
+        case 3: CycleImageSelection(); 
             return 0;
         case 4:
             g_programExiting = true;
@@ -3583,24 +3521,6 @@ void DrawCustomSlider(HDC hdc, RECT rc, int value, bool darkTheme, bool enabled)
     SelectObject(hdc, hOldBrush);
     DeleteObject(hBorder);
 }
-LRESULT CALLBACK SliderSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-        case WM_ERASEBKGND: 
-            return 1;
-        case WM_PAINT: {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            int sliderValue = (int)(g_imageScale.load() * 100.0f + 0.5f);
-            DrawCustomSlider(hdc, rc, sliderValue, g_darkTheme, IsWindowEnabled(hwnd));
-            EndPaint(hwnd, &ps);
-            return 0;
-        }
-        default:
-            return DefWindowProc(hwnd, msg, wParam, lParam);
-    }
-}
 void ApplyTheme() {
     if (g_darkTheme) {
         g_textColor = RGB(240,240,240);
@@ -3625,8 +3545,7 @@ void ApplyTheme() {
         g_hEditHoverBrush.reset(CreateSolidBrush(RGB(50,50,50)));
         if (g_hThemeButton) 
             SetWindowText(g_hThemeButton, L"Light");
-    }
-    else {
+    } else {
         g_textColor = RGB(40,40,40);
         g_buttonTextColor = RGB(40,40,40);
         g_borderColor = RGB(180,180,180);
@@ -3680,16 +3599,16 @@ bool CheckHotkeyConflict(wchar_t newKey, int excludeId, std::wstring& conflictAc
         return true; 
     }
     if (excludeId != 2 && newKey == g_settingsHotkeyKey) {
-        conflictAction = L"Toggle Settings Window Visibility"; 
-        return true; 
+        conflictAction = L"Toggle Settings Window Visibility";
+        return true;
     }
     if (excludeId != 3 && newKey == g_cycleHotkeyKey) {
-        conflictAction = L"Switch To Next Image From List"; 
-        return true; 
+        conflictAction = L"Switch To Next Image From List";
+        return true;
     }
     if (excludeId != 4 && newKey == g_quitHotkeyKey) {
-        conflictAction = L"Quit"; 
-        return true; 
+        conflictAction = L"Quit";
+        return true;
     }
     return false;
 }
@@ -3701,11 +3620,12 @@ LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LP
                 if (data) {
                     if (data->type == MB_OK) {
                         HWND hButton = GetDlgItem(hwnd, 1);
-                        if (hButton) SetFocus(hButton);
-                    } 
-                    else {
+                        if (hButton) 
+                            SetFocus(hButton);
+                    } else {
                         HWND hButton = GetDlgItem(hwnd, 2);
-                        if (hButton) SetFocus(hButton);
+                        if (hButton) 
+                            SetFocus(hButton);
                     }
                 }
             }
@@ -3716,8 +3636,7 @@ LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LP
                 if (data) 
                     data->result = (data->type == MB_OK) ? IDOK : IDYES;
                 DestroyWindow(hwnd);
-            } 
-            else if (LOWORD(wParam) == 2) {
+            } else if (LOWORD(wParam) == 2) {
                 MessageBoxData* data = (MessageBoxData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
                 if (data) 
                     data->result = IDNO;
@@ -3725,17 +3644,13 @@ LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LP
             }
             return 0;
         case WM_KEYDOWN:
-            if (wParam == VK_RETURN) {
+            if (wParam == VK_RETURN) 
                 SendMessage(hwnd, WM_COMMAND, 1, 0);
-            } 
             else if (wParam == VK_ESCAPE) {
                 MessageBoxData* data = (MessageBoxData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
-                if (data && data->type == MB_YESNO) {
+                if (data && data->type == MB_YESNO) 
                     SendMessage(hwnd, WM_COMMAND, 2, 0);
-                } 
-                else {
-                    SendMessage(hwnd, WM_COMMAND, 1, 0);
-                }
+                else SendMessage(hwnd, WM_COMMAND, 1, 0);
             }
             return 0;
         case WM_DRAWITEM: {
@@ -3783,8 +3698,7 @@ LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LP
             textRect.top += 5;
             textRect.bottom = cr.bottom - 30;
             MessageBoxData* data = (MessageBoxData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
-            if (data)
-                DrawText(hdcMem, data->message.c_str(), -1, &textRect, DT_LEFT | DT_WORDBREAK);
+            if (data) DrawText(hdcMem, data->message.c_str(), -1, &textRect, DT_LEFT | DT_WORDBREAK);
             SelectObject(hdcMem, hOldFont);
             BitBlt(hdc, cr.left, cr.top, cr.right - cr.left, cr.bottom - cr.top, hdcMem, 0, 0, SRCCOPY);
             SelectObject(hdcMem, hOldBitmap);
@@ -3795,23 +3709,21 @@ LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LP
         }
         case WM_SYSCOMMAND: {
             UINT nID = wParam & 0xFFF0;
-            if (nID == SC_KEYMENU || nID == SC_MOUSEMENU)
+            if (nID == SC_KEYMENU || nID == SC_MOUSEMENU) 
                 return 0;
             return DefWindowProc(hwnd, uMsg, wParam, lParam);
         }
         case WM_NCRBUTTONDOWN:
         case WM_NCRBUTTONUP:
-            if (wParam == HTCAPTION) {
+            if (wParam == HTCAPTION) 
                 return 0;
-            }
             break;
         case WM_ERASEBKGND:
             return 1;
         case WM_DESTROY: {
             int remaining = GetOpenMessageBoxCount() - 1;
-            if (remaining > 0) {
+            if (remaining > 0) 
                 ActivateNextMessageBox(hwnd);
-            } 
             else if (!g_programExiting && IsWindow(g_hwnd)) {
                 EnableWindow(g_hwnd, TRUE);
                 ForceForegroundWindow(g_hwnd);
@@ -3823,6 +3735,7 @@ LRESULT CALLBACK OwnerDrawMessageBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LP
     }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
+
 int ShowOwnerDrawMessageBox(HWND hwndParent, const std::wstring& message, UINT type) {
     static bool registered = false;
     if (!registered) {
@@ -3851,8 +3764,7 @@ int ShowOwnerDrawMessageBox(HWND hwndParent, const std::wstring& message, UINT t
         HWND hButton = CreateWindowW(L"BUTTON", L"OK", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP, w/2 - 30, h - 60, 60, 25, hMsgBox, (HMENU)1, GetModuleHandle(NULL), NULL);
         SendMessage(hButton, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
         SetFocus(hButton);
-    } 
-    else {
+    } else {
         HWND hYes = CreateWindowW(L"BUTTON", L"Yes", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP, w/2 - 70, h - 60, 60, 25, hMsgBox, (HMENU)1, GetModuleHandle(NULL), NULL);
         HWND hNo = CreateWindowW(L"BUTTON", L"No", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP, w/2 + 10, h - 60, 60, 25, hMsgBox, (HMENU)2, GetModuleHandle(NULL), NULL);
         SendMessage(hYes, WM_SETFONT, (WPARAM)g_hTabFont, TRUE);
@@ -4001,9 +3913,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             RestoreLastOverlay();
             UpdateHideOverlayCheckbox();
             RegisterHotkeys();
-            g_prevMonitorCount = (int)g_monitors.size();
-            for (const auto& m : g_monitors) 
-                g_prevMonitorRects.push_back(m.rect);
             nid = {sizeof(NOTIFYICONDATA), hwnd, ID_TRAY_APP_ICON, NIF_ICON | NIF_MESSAGE | NIF_TIP, WM_TRAYICON};
             nid.hIcon = g_hMainIcon;
             wcsncpy_s(nid.szTip, L"Custom Desktop Overlay", _countof(nid.szTip)-1);
@@ -4039,34 +3948,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             CorrectOffsetValues();
             UpdateOffsetBoundsDisplay();
             if (g_currentOverlay) {
-                UpdateOverlayPosition(); 
-                RenderOverlay(); 
-            }
-            g_prevMonitorCount = (int)g_monitors.size();
-            g_prevMonitorRects.clear();
-            {
-            std::shared_lock<std::shared_mutex> lock(g_monitorMutex); 
-            for (const auto& m : g_monitors) 
-                g_prevMonitorRects.push_back(m.rect); 
+                UpdateOverlayPosition();
+                RenderOverlay();
             }
             return 0;
         }
-        case WM_HOTKEY: 
+        case WM_HOTKEY:
             SendMessage(hwnd, WM_CANCELMODE, 0, 0);
             return HandleHotkey(wParam);
         case WM_MEASUREITEM: {
             MEASUREITEMSTRUCT* pMeasure = (MEASUREITEMSTRUCT*)lParam;
             if (pMeasure->CtlType == ODT_MENU) {
-                pMeasure->itemHeight = 24; 
-                pMeasure->itemWidth = 150; 
-                return TRUE; 
+                pMeasure->itemHeight = 24;
+                pMeasure->itemWidth = 150;
+                return TRUE;
             }
             break;
         }
         case WM_COMMAND:
             switch (LOWORD(wParam)) {
                 case ID_TRAY_SHOW: 
-                    ToggleSettingsWindow();
+                    ToggleSettingsWindow(); 
                     break;
                 case ID_TRAY_HIDE_OVERLAY: 
                     ToggleHideOverlay(); 
@@ -4161,19 +4063,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 case ID_BROWSE_BUTTON: 
                     BrowseForImage(); 
                     break;
-                case ID_CONTEXT_OPEN: if (g_imageListSelected >= 0 && g_imageListSelected < (int)g_imageFiles.size()) 
-                    OpenFileLocation(g_imageFiles[g_imageListSelected].path); 
+                case ID_CONTEXT_OPEN: 
+                    if (g_imageListSelected >= 0 && g_imageListSelected < (int)g_imageFiles.size()) 
+                        OpenFileLocation(g_imageFiles[g_imageListSelected].path); 
                     break;
                 case ID_CONTEXT_REMOVE:
                     if (g_imageListSelected >= 0) {
                         std::wstring msg = L"Remove this image from the list? Location && Size settings will be lost.";
                         int result = ShowOwnerDrawMessageBox(hwnd, msg, MB_YESNO);
-                        if (result == IDYES) {
+                        if (result == IDYES) 
                             RemoveImageFromList(g_imageListSelected);
-                        } 
-                        else {
-                            g_imageListSelected = g_currentImageIndex;
-                            InvalidateRect(g_hImageList, NULL, TRUE);
+                        else { 
+                            g_imageListSelected = g_currentImageIndex; 
+                            InvalidateRect(g_hImageList, NULL, TRUE); 
                         }
                     }
                     break;
@@ -4185,7 +4087,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     if (HIWORD(wParam) == BN_CLICKED) 
                         ToggleTheme(); 
                     break;
-                case ID_RESET_TOGGLE: {
+                case ID_RESET_TOGGLE: { 
                     wchar_t old = g_toggleHotkeyKey; 
                     if (ResetHotkeyField(1, DEFAULT_TOGGLE_KEY, g_toggleHotkeyKey, g_lastValidToggleKey, g_hotkeyToggleField) && g_hHotkeyToggleDisplay) 
                         InvalidateRect(g_hHotkeyToggleDisplay, NULL, TRUE); 
@@ -4194,7 +4096,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                         g_settingsChanged = true; 
                     break; 
                 }
-                case ID_RESET_SETTINGS: {
+                case ID_RESET_SETTINGS: { 
                     wchar_t old = g_settingsHotkeyKey; 
                     if (ResetHotkeyField(2, DEFAULT_SETTINGS_KEY, g_settingsHotkeyKey, g_lastValidSettingsKey, g_hotkeySettingsField) && g_hHotkeySettingsDisplay) 
                         InvalidateRect(g_hHotkeySettingsDisplay, NULL, TRUE); 
@@ -4203,7 +4105,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                         g_settingsChanged = true; 
                     break; 
                 }
-                case ID_RESET_CYCLE: {
+                case ID_RESET_CYCLE: { 
                     wchar_t old = g_cycleHotkeyKey; 
                     if (ResetHotkeyField(3, DEFAULT_CYCLE_KEY, g_cycleHotkeyKey, g_lastValidCycleKey, g_hotkeyCycleField) && g_hHotkeyCycleDisplay) 
                         InvalidateRect(g_hHotkeyCycleDisplay, NULL, TRUE); 
@@ -4212,7 +4114,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                         g_settingsChanged = true; 
                     break; 
                 }
-                case ID_RESET_QUIT: {
+                case ID_RESET_QUIT: { 
                     wchar_t old = g_quitHotkeyKey; 
                     if (ResetHotkeyField(4, DEFAULT_QUIT_KEY, g_quitHotkeyKey, g_lastValidQuitKey, g_hotkeyQuitField) && g_hHotkeyQuitDisplay) 
                         InvalidateRect(g_hHotkeyQuitDisplay, NULL, TRUE); 
@@ -4225,37 +4127,37 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     if (HIWORD(wParam) == BN_CLICKED) 
                         ToggleReverseDirection(); 
                     break;
-                case ID_SPIN_X_UP:
-                    g_offsetX++;
-                    CorrectOffsetValues();
-                    UpdateOffsetEditControls();
+                case ID_SPIN_X_UP: 
+                    g_offsetX++; 
+                    CorrectOffsetValues(); 
+                    UpdateOffsetEditControls(); 
                     if (g_currentImageIndex != -1) 
-                        SaveCurrentImageSettings();
-                    g_settingsChanged = true;
+                        SaveCurrentImageSettings(); 
+                    g_settingsChanged = true; 
                     break;
-                case ID_SPIN_X_DOWN:
-                    g_offsetX--;
-                    CorrectOffsetValues();
-                    UpdateOffsetEditControls();
+                case ID_SPIN_X_DOWN: 
+                    g_offsetX--; 
+                    CorrectOffsetValues(); 
+                    UpdateOffsetEditControls(); 
                     if (g_currentImageIndex != -1) 
-                        SaveCurrentImageSettings();
-                    g_settingsChanged = true;
+                        SaveCurrentImageSettings(); 
+                    g_settingsChanged = true; 
                     break;
                 case ID_SPIN_Y_UP:
-                    g_offsetY++;
-                    CorrectOffsetValues();
-                    UpdateOffsetEditControls();
+                    g_offsetY++; 
+                    CorrectOffsetValues(); 
+                    UpdateOffsetEditControls(); 
                     if (g_currentImageIndex != -1) 
-                        SaveCurrentImageSettings();
-                    g_settingsChanged = true;
+                        SaveCurrentImageSettings(); 
+                    g_settingsChanged = true; 
                     break;
-                case ID_SPIN_Y_DOWN:
-                    g_offsetY--;
-                    CorrectOffsetValues();
-                    UpdateOffsetEditControls();
+                case ID_SPIN_Y_DOWN: 
+                    g_offsetY--; 
+                    CorrectOffsetValues(); 
+                    UpdateOffsetEditControls(); 
                     if (g_currentImageIndex != -1) 
-                        SaveCurrentImageSettings();
-                    g_settingsChanged = true;
+                        SaveCurrentImageSettings(); 
+                    g_settingsChanged = true; 
                     break;
                 case ID_SPIN_SIZE_UP: {
                     float newScale = std::min(2.0f, g_imageScale.load() + 0.01f);
@@ -4263,54 +4165,52 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     CorrectScaleValue();
                     UpdateScaleControls();
                     ApplyScaleChange();
-                    if (g_currentImageIndex != -1) 
+                    if (g_currentImageIndex != -1)
                         SaveCurrentImageSettings();
                     g_settingsChanged = true;
                     break;
                 }
                 case ID_SPIN_SIZE_DOWN: {
-                    float newScale = std::max(0.0f, g_imageScale.load() - 0.01f);
-                    g_imageScale.store(newScale);
+                    float newScale = std::max(0.0f, g_imageScale.load() - 0.01f); 
+                    g_imageScale.store(newScale); 
                     CorrectScaleValue();
                     UpdateScaleControls();
                     ApplyScaleChange();
-                    if (g_currentImageIndex != -1) 
+                    if (g_currentImageIndex != -1)
                         SaveCurrentImageSettings();
                     g_settingsChanged = true;
                     break;
-                }
+                    }
             }
             return 0;
         case WM_SYSCOMMAND: {
-            UINT nID = wParam & 0xFFF0; 
+            UINT nID = wParam & 0xFFF0;
             if (nID == SC_KEYMENU || nID == SC_MOUSEMENU) 
-                return 0; 
-            return DefWindowProc(hwnd, uMsg, wParam, lParam); }
-        case WM_NCLBUTTONDBLCLK: 
+                return 0;
+            return DefWindowProc(hwnd, uMsg, wParam, lParam);
+        }
+        case WM_NCLBUTTONDBLCLK:
             if (wParam == HTSYSMENU || wParam == HTCAPTION) 
-                return 0; 
+                return 0;
             return DefWindowProc(hwnd, uMsg, wParam, lParam);
         case WM_DRAWITEM: {
             DRAWITEMSTRUCT* pDraw = (DRAWITEMSTRUCT*)lParam;
             if (pDraw->CtlID == ID_HIDE_OVERLAY_CHECKBOX || pDraw->CtlID == ID_REVERSE_DIRECTION_CHECKBOX) {
-                wchar_t buffer[256]; 
-                GetWindowText(pDraw->hwndItem, buffer, 256);
+                wchar_t buffer[256]; GetWindowText(pDraw->hwndItem, buffer, 256);
                 std::wstring text = buffer; 
                 if (!text.empty() && text[0] == L' ') 
                     text = text.substr(1);
                 bool isChecked = (pDraw->CtlID == ID_HIDE_OVERLAY_CHECKBOX) ? g_hideOverlay : g_reverseDirection;
                 DrawOwnerDrawCheckbox(pDraw->hDC, pDraw->hwndItem, isChecked, text, false);
                 return TRUE;
-            }
-            else if (pDraw->CtlID == ID_TAB_BUTTON1 || pDraw->CtlID == ID_TAB_BUTTON2 || pDraw->CtlID == ID_TAB_BUTTON3 || pDraw->CtlID == ID_BROWSE_BUTTON || pDraw->CtlID == ID_THEME_BUTTON || pDraw->CtlID == ID_RESET_TOGGLE || pDraw->CtlID == ID_RESET_SETTINGS || pDraw->CtlID == ID_RESET_CYCLE || pDraw->CtlID == ID_RESET_QUIT) {
+            } else if (pDraw->CtlID == ID_TAB_BUTTON1 || pDraw->CtlID == ID_TAB_BUTTON2 || pDraw->CtlID == ID_TAB_BUTTON3 || pDraw->CtlID == ID_BROWSE_BUTTON || pDraw->CtlID == ID_THEME_BUTTON || pDraw->CtlID == ID_RESET_TOGGLE || pDraw->CtlID == ID_RESET_SETTINGS || pDraw->CtlID == ID_RESET_CYCLE || pDraw->CtlID == ID_RESET_QUIT) {
                 wchar_t buffer[256]; 
                 GetWindowText(pDraw->hwndItem, buffer, 256);
                 bool isPressed = (pDraw->itemState & ODS_SELECTED) != 0;
                 bool isActiveTab = (pDraw->CtlID == ID_TAB_BUTTON1 && g_activeTab == 1) || (pDraw->CtlID == ID_TAB_BUTTON2 && g_activeTab == 2) || (pDraw->CtlID == ID_TAB_BUTTON3 && g_activeTab == 3);
                 DrawOwnerDrawButton(pDraw->hDC, pDraw->hwndItem, isPressed, buffer, isActiveTab, false);
                 return TRUE;
-            }
-            else if (pDraw->CtlID == ID_SIZE_SLIDER) {
+            } else if (pDraw->CtlID == ID_SIZE_SLIDER) {
                 HDC hdcMem = CreateCompatibleDC(pDraw->hDC);
                 HBITMAP hBitmap = CreateCompatibleBitmap(pDraw->hDC, pDraw->rcItem.right - pDraw->rcItem.left, pDraw->rcItem.bottom - pDraw->rcItem.top);
                 HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
@@ -4321,20 +4221,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 DeleteObject(hBitmap);
                 DeleteDC(hdcMem);
                 return TRUE;
-            }
-            else if (pDraw->CtlType == ODT_MENU) {
-                std::wstring menuText; 
-                bool isChecked = false; 
-                bool isTrayHideOverlay = false;
+            } else if (pDraw->CtlType == ODT_MENU) {
+                std::wstring menuText; bool isChecked = false; bool isTrayHideOverlay = false;
                 switch (pDraw->itemID) {
                     case ID_TRAY_HIDE_OVERLAY: 
                         menuText = L"Hide Overlay"; 
                         isChecked = g_hideOverlay; 
                         isTrayHideOverlay = true; 
-                        break;
+                    break;
                     case ID_TRAY_SHOW: 
                         menuText = L"Settings"; 
-                        break;
+                    break;
                     case ID_TRAY_NEXT_IMAGE: 
                         menuText = L"Next Image"; 
                         break;
@@ -4351,11 +4248,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                         if (pDraw->itemData) 
                             menuText = (const wchar_t*)pDraw->itemData;
                 }
-                if (!menuText.empty()) { 
-                    bool isSelected = (pDraw->itemState & ODS_SELECTED) != 0; 
-                    bool isDisabled = (pDraw->itemState & ODS_DISABLED) != 0; 
-                    DrawMenuItem(pDraw->hDC, pDraw->rcItem, menuText, isSelected, isChecked, isDisabled, isTrayHideOverlay); 
-                    return TRUE; 
+                if (!menuText.empty()) {
+                    bool isSelected = (pDraw->itemState & ODS_SELECTED) != 0;
+                    bool isDisabled = (pDraw->itemState & ODS_DISABLED) != 0;
+                    DrawMenuItem(pDraw->hDC, pDraw->rcItem, menuText, isSelected, isChecked, isDisabled, isTrayHideOverlay);
+                    return TRUE;
                 }
             }
             break;
@@ -4378,14 +4275,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             SetTextColor((HDC)wParam, g_textColor);
             return (LRESULT)g_hBackgroundBrush.get();
         case WM_TRAYICON:
-            if (lParam == WM_LBUTTONDBLCLK) { 
-                g_windowVisible = !g_windowVisible; 
-                ShowWindow(hwnd, g_windowVisible ? SW_RESTORE : SW_HIDE); 
-                if (g_windowVisible) SetForegroundWindow(hwnd); 
-            }
-            else if (lParam == WM_RBUTTONUP) {
-                POINT pt; 
-                GetCursorPos(&pt);
+            if (lParam == WM_LBUTTONDBLCLK) {
+                g_windowVisible = !g_windowVisible;
+                ShowWindow(hwnd, g_windowVisible ? SW_RESTORE : SW_HIDE);
+                if (g_windowVisible) 
+                    SetForegroundWindow(hwnd);
+            } else if (lParam == WM_RBUTTONUP) {
+                POINT pt; GetCursorPos(&pt);
                 HMENU hMenu = CreatePopupMenu();
                 CreateOwnerDrawMenu(hMenu, 0, ID_TRAY_HIDE_OVERLAY, L"Hide Overlay");
                 CreateOwnerDrawMenu(hMenu, 1, ID_TRAY_SHOW, L"Settings");
@@ -4398,16 +4294,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             return 0;
         case WM_DESTROY: {
             ShowWindow(g_hwnd, SW_HIDE);
-            if (g_currentOverlay) 
-                ShowWindow(g_currentOverlay, SW_HIDE);
+            if (g_currentOverlay) ShowWindow(g_currentOverlay, SW_HIDE);
             UpdateWindow(g_hwnd);
             g_programExiting = true;
             if (g_monitorNamesThread.joinable()) 
                 g_monitorNamesThread.join();
             if (g_currentOverlay) { 
-                DestroyWindow(g_currentOverlay);
+                DestroyWindow(g_currentOverlay); 
                 g_currentOverlay = NULL; 
                 g_currentOverlayAtomic = nullptr; 
+            }
+            if (g_hPopupWindow) { 
+                DestroyWindow(g_hPopupWindow); 
+                g_hPopupWindow = NULL; 
             }
             if (g_hMenuOwner) 
                 DestroyWindow(g_hMenuOwner);
@@ -4464,14 +4363,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             if (g_oldSpinSizeDownProc) 
                 SetWindowLongPtr(g_hSpinSizeDown, GWLP_WNDPROC, (LONG_PTR)g_oldSpinSizeDownProc);
             StopRenderThread();
+            FreeRenderBuffer();
             UnregisterHotkeys();
             if (g_settingsChanged) 
                 SaveAllSettingsToIni();
             Shell_NotifyIcon(NIM_DELETE, &nid);
             { 
-            std::lock_guard<std::mutex> lock(g_renderDataMutex); 
-            g_cachedBitmapShared.reset(); 
-            g_animatedGIFShared.reset(); 
+                std::lock_guard<std::mutex> lock(g_renderDataMutex); 
+                g_cachedBitmapShared.reset(); 
+                g_animatedGIFShared.reset(); 
             }
             SafeGdiplusShutdown();
             if (g_hTabFont) 
@@ -4485,26 +4385,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             PostQuitMessage(0);
             return 0;
         }
-        case WM_ERASEBKGND: 
+        case WM_ERASEBKGND:
             return 1;
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
-            RECT cr; 
-            GetClientRect(hwnd, &cr);
+            RECT cr; GetClientRect(hwnd, &cr);
             FillRect(hdc, &cr, g_hBackgroundBrush.get());
             HPEN hLinePen = CreatePen(PS_SOLID, 1, g_borderColor);
             HPEN hOldPen = (HPEN)SelectObject(hdc, hLinePen);
-            MoveToEx(hdc, 0, 25, NULL); 
-            LineTo(hdc, cr.right, 25);
-            SelectObject(hdc, hOldPen); 
-            DeleteObject(hLinePen);
+            MoveToEx(hdc, 0, 25, NULL); LineTo(hdc, cr.right, 25);
+            SelectObject(hdc, hOldPen); DeleteObject(hLinePen);
             HPEN hSepPen = CreatePen(PS_SOLID, 1, g_darkTheme ? RGB(60,60,60) : RGB(220,220,220));
             hOldPen = (HPEN)SelectObject(hdc, hSepPen);
-            MoveToEx(hdc, 0, 245, NULL); 
-            LineTo(hdc, cr.right, 245);
-            SelectObject(hdc, hOldPen); 
-            DeleteObject(hSepPen);
+            MoveToEx(hdc, 0, 245, NULL); LineTo(hdc, cr.right, 245);
+            SelectObject(hdc, hOldPen); DeleteObject(hSepPen);
             HFONT hOldFont = (HFONT)SelectObject(hdc, g_hTabFont);
             SetTextColor(hdc, g_textColor);
             SetBkColor(hdc, g_darkTheme ? RGB(25,25,25) : RGB(255,255,255));
@@ -4513,11 +4408,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             bool showMonitorControls = IsWindowVisible(g_hMonitorList) && IsWindowEnabled(g_hMonitorList);
             bool showHotkeyControls = IsWindowVisible(g_hHotkeyToggleDisplay) && IsWindowEnabled(g_hHotkeyToggleDisplay);
             if (showImageControls) {
-                RECT tr = {8, 30, 280, 50}; 
-                FillRect(hdc, &tr, g_hBackgroundBrush.get()); 
+                RECT tr = {8, 30, 280, 50}; FillRect(hdc, &tr, g_hBackgroundBrush.get()); 
                 DrawText(hdc, L"Images List", -1, &tr, DT_LEFT | DT_TOP);
-                RECT fr = {8, 230, 280, 245}; 
-                FillRect(hdc, &fr, g_hBackgroundBrush.get()); 
+                RECT fr = {8, 230, 280, 245}; FillRect(hdc, &fr, g_hBackgroundBrush.get()); 
                 DrawText(hdc, L"Supported formats: .png, .jpg, .jpeg, .gif", -1, &fr, DT_LEFT | DT_TOP);
             }
             if (showMonitorControls) {
@@ -4535,27 +4428,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 DrawText(hdc, L"Y:", -1, &ylr, DT_LEFT | DT_TOP);
                 int maxX = 0, maxY = 0;
                 { 
-                std::shared_lock<std::shared_mutex> lock(g_monitorMutex); 
-                if (g_selectedMonitor >= 0 && g_selectedMonitor < (int)g_monitors.size()) {
-                    const auto& m = g_monitors[g_selectedMonitor]; 
-                    maxX = (m.rect.right - m.rect.left) / 2; 
-                    maxY = (m.rect.bottom - m.rect.top) / 2; 
-                }
+                    std::shared_lock<std::shared_mutex> lock(g_monitorMutex); 
+                    if (g_selectedMonitor >= 0 && g_selectedMonitor < (int)g_monitors.size()) {
+                        const auto& m = g_monitors[g_selectedMonitor]; 
+                        maxX = (m.rect.right - m.rect.left) / 2; 
+                        maxY = (m.rect.bottom - m.rect.top) / 2; 
+                    } 
                 }
                 std::wstring xb = L"[" + std::to_wstring(-maxX) + L"; " + std::to_wstring(maxX) + L"]";
                 std::wstring yb = L"[" + std::to_wstring(-maxY) + L"; " + std::to_wstring(maxY) + L"]";
-                RECT xbr = {100, 124, 240, 155};
+                RECT xbr = {100, 124, 240, 155}; 
                 FillRect(hdc, &xbr, g_hBackgroundBrush.get()); 
                 DrawText(hdc, xb.c_str(), -1, &xbr, DT_LEFT | DT_TOP);
-                RECT ybr = {100, 147, 240, 180};
+                RECT ybr = {100, 147, 240, 180}; 
                 FillRect(hdc, &ybr, g_hBackgroundBrush.get()); 
                 DrawText(hdc, yb.c_str(), -1, &ybr, DT_LEFT | DT_TOP);
-                RECT str = {8, 171, 280, 185}; 
-                FillRect(hdc, &str, g_hBackgroundBrush.get()); 
+                RECT str = {8, 171, 280, 185}; FillRect(hdc, &str, g_hBackgroundBrush.get()); 
                 DrawText(hdc, L"Size", -1, &str, DT_LEFT | DT_TOP);
                 std::wstring szb = L"[0.00; 2.00]";
                 RECT szbr = {82, 213, 220, 240}; 
-                FillRect(hdc, &szbr, g_hBackgroundBrush.get()); 
+                FillRect(hdc, &szbr, g_hBackgroundBrush.get());
                 DrawText(hdc, szb.c_str(), -1, &szbr, DT_LEFT | DT_TOP);
             }
             if (showHotkeyControls) {
@@ -4594,25 +4486,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             EndPaint(hwnd, &ps);
             return 0;
         }
-        case WM_CLOSE: 
-            ShowWindow(hwnd, SW_HIDE); 
-            g_windowVisible = false; 
+        case WM_CLOSE:
+            ShowWindow(hwnd, SW_HIDE);
+            g_windowVisible = false;
             return 0;
-        case WM_SIZE: 
+        case WM_SIZE:
             if (wParam == SIZE_MINIMIZED) {
                 ShowWindow(hwnd, SW_HIDE);
-                g_windowVisible = false; 
-            }
-            else
-                InvalidateRect(hwnd, NULL, TRUE); 
+                g_windowVisible = false;
+            } else InvalidateRect(hwnd, NULL, TRUE);
             return 0;
         case WM_GETMINMAXINFO: {
-            MINMAXINFO* mmi = (MINMAXINFO*)lParam; 
-            mmi->ptMinTrackSize.x = 300; 
-            mmi->ptMinTrackSize.y = 300; 
-            mmi->ptMaxTrackSize.x = 300; 
-            mmi->ptMaxTrackSize.y = 300; 
-            return 0; 
+            MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+            mmi->ptMinTrackSize.x = 300;
+            mmi->ptMinTrackSize.y = 300;
+            mmi->ptMaxTrackSize.x = 300;
+            mmi->ptMaxTrackSize.y = 300;
+            return 0;
         }
         case WM_SHOW_AND_MESSAGE: {
             std::wstring msgText = L"The program is already running. The settings window has been restored";
@@ -4621,13 +4511,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             else if (!IsWindowVisible(hwnd)) 
                 ShowWindow(hwnd, SW_SHOWNA);
             if (IsMessageBoxWithTextOpen(msgText)) {
-                HWND hMsgBox = FindWindow(L"OwnerDrawMessageBox", NULL); 
+                HWND hMsgBox = FindWindow(L"OwnerDrawMessageBox", NULL);
                 if (hMsgBox) 
-                    ForceForegroundWindow(hMsgBox); 
-                }
-            else {
-                ForceForegroundWindow(hwnd); 
-                ShowOwnerDrawMessageBox(hwnd, msgText, MB_OK); 
+                    ForceForegroundWindow(hMsgBox);
+            } else {
+                ForceForegroundWindow(hwnd);
+                ShowOwnerDrawMessageBox(hwnd, msgText, MB_OK);
             }
             return 0;
         }
@@ -4638,9 +4527,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             MapWindowPoints(HWND_DESKTOP, hwnd, (LPPOINT)&sr, 2);
             bool onSlider = PtInRect(&sr, pt) && IsWindowVisible(g_hSizeSlider);
             if (onSlider) {
-                SetFocus(hwnd); 
-                dragging = true; 
-                SetCapture(hwnd);
+                SetFocus(hwnd); dragging = true; SetCapture(hwnd);
                 int margin = 5; 
                 int trackStart = sr.left + margin; 
                 int trackEnd = sr.right - margin; 
@@ -4660,32 +4547,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     g_imageScale.store(newScale, std::memory_order_relaxed);
                     UpdateScaleControls(); 
                     ApplyScaleChange(); 
-                    g_settingsChanged = true; 
-                }
-                else {
-                    RenderOverlay(); 
-                }
+                    g_settingsChanged = true;
+                } else RenderOverlay();
                 return 0;
             }
             HWND hChild = ChildWindowFromPoint(hwnd, pt);
             if (hChild != NULL && hChild != hwnd) {
-                UINT id = GetDlgCtrlID(hChild); 
-                if (id == ID_OFFSET_X_DISPLAY || id == ID_OFFSET_Y_DISPLAY || id == ID_SIZE_DISPLAY || id == ID_HOTKEY_TOGGLE_DISPLAY || id == ID_HOTKEY_SETTINGS_DISPLAY || id == ID_HOTKEY_CYCLE_DISPLAY || id == ID_HOTKEY_QUIT_DISPLAY) {}
-                else SetFocus(hwnd); 
-            }
-            else SetFocus(hwnd);
+                UINT id = GetDlgCtrlID(hChild);
+                if (id == ID_OFFSET_X_DISPLAY || id == ID_OFFSET_Y_DISPLAY || id == ID_SIZE_DISPLAY || id == ID_HOTKEY_TOGGLE_DISPLAY || id == ID_HOTKEY_SETTINGS_DISPLAY || id == ID_HOTKEY_CYCLE_DISPLAY || id == ID_HOTKEY_QUIT_DISPLAY) {
+                } else SetFocus(hwnd);
+            } else SetFocus(hwnd);
             return DefWindowProc(hwnd, uMsg, wParam, lParam);
         }
         case WM_MOUSEMOVE:
             if (dragging && (wParam & MK_LBUTTON)) {
                 POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-                RECT sr; 
-                GetWindowRect(g_hSizeSlider, &sr); 
-                MapWindowPoints(HWND_DESKTOP, hwnd, (LPPOINT)&sr, 2);
-                int margin = 5; 
-                int trackStart = sr.left + margin; 
-                int trackEnd = sr.right - margin; 
-                int trackWidth = trackEnd - trackStart;
+                RECT sr; GetWindowRect(g_hSizeSlider, &sr); MapWindowPoints(HWND_DESKTOP, hwnd, (LPPOINT)&sr, 2);
+                int margin = 5; int trackStart = sr.left + margin; int trackEnd = sr.right - margin; int trackWidth = trackEnd - trackStart;
                 int clickX = pt.x; 
                 if (clickX < trackStart) 
                     clickX = trackStart; 
@@ -4698,26 +4576,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     newValue = 200;
                 float newScale = newValue / 100.0f;
                 if (fabs(g_imageScale.load() - newScale) > 0.001f) {
-                    g_imageScale.store(newScale, std::memory_order_relaxed); 
-                    UpdateScaleControls(); 
-                    ApplyScaleChange(); }
+                    g_imageScale.store(newScale, std::memory_order_relaxed);
+                    UpdateScaleControls();
+                    ApplyScaleChange();
+                }
             }
             break;
         case WM_LBUTTONUP:
             if (dragging) {
                 dragging = false; 
                 ReleaseCapture(); 
-                ApplyScaleChange(); 
+                ApplyScaleChange();
                 if (g_currentImageIndex != -1) 
-                    SaveCurrentImageSettings(); 
-                g_settingsChanged = true; 
-        }
+                    SaveCurrentImageSettings();
+                g_settingsChanged = true;
+            }
             break;
         case WM_UPDATE_MONITOR_NAMES:
-            if (g_hMonitorList) {
+            if (g_hMonitorList) { 
                 InvalidateRect(g_hMonitorList, NULL, TRUE); 
-                UpdateWindow(g_hMonitorList); 
-            }
+                UpdateWindow(g_hMonitorList); }
             break;
     }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
@@ -4769,12 +4647,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg); 
-        DispatchMessage(&msg); 
+        DispatchMessage(&msg);
     }
     StopRenderThread();
     SafeGdiplusShutdown();
     CoUninitialize();
-    if (hMutex) {
+    if (hMutex) { 
         ReleaseMutex(hMutex); 
         CloseHandle(hMutex); 
     }
