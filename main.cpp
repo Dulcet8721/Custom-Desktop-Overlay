@@ -1831,6 +1831,7 @@ bool ResetHotkeyField(int fieldId, wchar_t defaultKey, wchar_t& currentKey, wcha
         currentKey = defaultKey;
         lastValidKey = defaultKey;
         field.text = std::wstring(1, defaultKey);
+        g_settingsChanged = true;
     }
     field.cursorPos = (int)field.text.length();
     field.selStart = field.cursorPos;
@@ -2519,10 +2520,58 @@ void AddImageToList(const std::wstring& filePath, bool saveToIni) {
     if (saveToIni) 
         g_settingsChanged = true;
 }
+std::wstring ReadWholeFile(const std::wstring& path) {
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return L"";
+    DWORD size = GetFileSize(hFile, NULL);
+    if (size == INVALID_FILE_SIZE || size == 0) {
+        CloseHandle(hFile);
+        return L"";
+    }
+    std::vector<BYTE> buffer(size);
+    DWORD read;
+    if (!ReadFile(hFile, buffer.data(), size, &read, NULL) || read != size) {
+        CloseHandle(hFile);
+        return L"";
+    }
+    CloseHandle(hFile);
+    if (size >= 2 && buffer[0] == 0xFF && buffer[1] == 0xFE) {
+        return std::wstring((wchar_t*)(buffer.data() + 2), (size - 2) / 2);
+    }
+    int len = MultiByteToWideChar(CP_ACP, 0, (LPCCH)buffer.data(), size, NULL, 0);
+    std::wstring result(len, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, (LPCCH)buffer.data(), size, &result[0], len);
+    return result;
+}
+std::map<std::wstring, std::map<std::wstring, std::wstring>> ParseIni(const std::wstring& content) {
+    std::map<std::wstring, std::map<std::wstring, std::wstring>> result;
+    std::wstring currentSection;
+    std::wistringstream iss(content);
+    std::wstring line;
+    while (std::getline(iss, line)) {
+        if (!line.empty() && line.back() == L'\r')
+            line.pop_back();
+        if (line.empty())
+            continue;
+        if (line.front() == L'[' && line.back() == L']') {
+            currentSection = line.substr(1, line.length() - 2);
+            result[currentSection];
+        } else {
+            size_t eq = line.find(L'=');
+            if (eq != std::wstring::npos && !currentSection.empty()) {
+                std::wstring key = line.substr(0, eq);
+                std::wstring value = line.substr(eq + 1);
+                result[currentSection][key] = value;
+            }
+        }
+    }
+    return result;
+}
 void LoadAllSettingsFromIni() {
     std::wstring iniPath = GetIniFilePath();
-    DWORD attrs = GetFileAttributesW(iniPath.c_str());
-    if (attrs == INVALID_FILE_ATTRIBUTES) {
+    std::wstring content = ReadWholeFile(iniPath);
+    if (content.empty()) {
         int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
         g_windowX = (sw - 300) / 2;
         g_windowY = (sh - 300) / 2;
@@ -2541,114 +2590,74 @@ void LoadAllSettingsFromIni() {
         g_settingsChanged = false;
         return;
     }
-    wchar_t themeStr[10];
-    GetPrivateProfileStringW(L"Window", L"Theme", L"Light", themeStr, 10, iniPath.c_str());
-    g_darkTheme = (wcscmp(themeStr, L"Dark") == 0);
-    wchar_t countStr[10];
-    GetPrivateProfileStringW(L"Images List", L"Count", L"0", countStr, 10, iniPath.c_str());
-    int count = _wtoi(countStr);
+    auto iniData = ParseIni(content);
+    if (iniData.count(L"Window")) {
+        auto& sec = iniData[L"Window"];
+        if (sec.count(L"Theme"))
+            g_darkTheme = (sec[L"Theme"] == L"Dark");
+        if (sec.count(L"WindowX"))
+            g_windowX = _wtoi(sec[L"WindowX"].c_str());
+        if (sec.count(L"WindowY"))
+            g_windowY = _wtoi(sec[L"WindowY"].c_str());
+    }
+    if (iniData.count(L"Hotkeys")) {
+        auto& sec = iniData[L"Hotkeys"];
+        auto readHotkey = [&](const std::wstring& key, wchar_t& dest, wchar_t& lastValid) {
+            if (sec.count(key)) {
+                wchar_t ch = sec[key].empty() ? 0 : std::towupper(sec[key][0]);
+                if (ch == 0 || IsValidHotkeyChar(ch)) {
+                    dest = ch;
+                    lastValid = ch;
+                } else {
+                    dest = DEFAULT_TOGGLE_KEY;
+                    lastValid = dest;
+                }
+            }
+        };
+        readHotkey(L"ToggleOverlayVisibility", g_toggleHotkeyKey, g_lastValidToggleKey);
+        readHotkey(L"ToggleSettingsWindowVisibility", g_settingsHotkeyKey, g_lastValidSettingsKey);
+        readHotkey(L"SwitchToNextImageFromList", g_cycleHotkeyKey, g_lastValidCycleKey);
+        readHotkey(L"Quit", g_quitHotkeyKey, g_lastValidQuitKey);
+        if (sec.count(L"ReverseDirection"))
+            g_reverseDirection = (_wtoi(sec[L"ReverseDirection"].c_str()) != 0);
+    }
     g_imageFiles.clear();
-    for (int i = 0; i < count; i++) {
-        std::wstring key = L"Image" + std::to_wstring(i);
-        wchar_t path[MAX_PATH];
-        GetPrivateProfileStringW(L"Images List", key.c_str(), L"", path, MAX_PATH, iniPath.c_str());
-        if (wcslen(path) > 0) {
-            ImageFile img;
-            img.path = path;
-            size_t lastSlash = img.path.find_last_of(L"\\/");
-            img.filename = (lastSlash != std::wstring::npos) ? img.path.substr(lastSlash + 1) : img.path;
-            img.settings = ImageSettings();
-            std::wstring section = L"Location & Size " + std::to_wstring(i);
-            wchar_t monitorStr[10], offsetXStr[32], offsetYStr[32], scaleStr[32];
-            GetPrivateProfileStringW(section.c_str(), L"SelectedMonitor", L"0", monitorStr, 10, iniPath.c_str());
-            GetPrivateProfileStringW(section.c_str(), L"OffsetX", L"0", offsetXStr, 32, iniPath.c_str());
-            GetPrivateProfileStringW(section.c_str(), L"OffsetY", L"0", offsetYStr, 32, iniPath.c_str());
-            GetPrivateProfileStringW(section.c_str(), L"ImageScale", L"1.0", scaleStr, 32, iniPath.c_str());
-            img.settings.monitor = _wtoi(monitorStr);
-            img.settings.offsetX = _wtoi(offsetXStr);
-            img.settings.offsetY = _wtoi(offsetYStr);
-            float loadedScale = (float)_wtof(scaleStr);
-            if (loadedScale < 0.0f) 
-                loadedScale = 0.0f;
-            if (loadedScale > 2.0f) 
-                loadedScale = 2.0f;
-            img.settings.scale = loadedScale;
-            g_imageFiles.push_back(img);
+    if (iniData.count(L"Images List")) {
+        auto& sec = iniData[L"Images List"];
+        if (sec.count(L"Count")) {
+            int count = _wtoi(sec[L"Count"].c_str());
+            for (int i = 0; i < count; ++i) {
+                std::wstring key = L"Image" + std::to_wstring(i);
+                if (sec.count(key)) {
+                    ImageFile img;
+                    img.path = sec[key];
+                    size_t lastSlash = img.path.find_last_of(L"\\/");
+                    img.filename = (lastSlash != std::wstring::npos) ? img.path.substr(lastSlash + 1) : img.path;
+                    img.settings = ImageSettings();
+                    g_imageFiles.push_back(img);
+                }
+            }
         }
+        if (sec.count(L"LastDisplayed"))
+            g_lastDisplayedImage = sec[L"LastDisplayed"];
     }
-    wchar_t lastDisplayed[MAX_PATH];
-    GetPrivateProfileStringW(L"Images List", L"LastDisplayed", L"", lastDisplayed, MAX_PATH, iniPath.c_str());
-    g_lastDisplayedImage = lastDisplayed;
-    wchar_t toggleKeyStr[10];
-    GetPrivateProfileStringW(L"Hotkeys", L"ToggleOverlayVisibility", std::wstring(1, DEFAULT_TOGGLE_KEY).c_str(), toggleKeyStr, 10, iniPath.c_str());
-    if (wcslen(toggleKeyStr) > 0) {
-        wchar_t key = std::towupper(toggleKeyStr[0]);
-        if (IsValidHotkeyChar(key)) {
-            g_toggleHotkeyKey = key; 
-            g_lastValidToggleKey = key; 
-            UpdateEditFieldText(&g_hotkeyToggleField, std::wstring(1, key));
-        } else {
-            g_toggleHotkeyKey = DEFAULT_TOGGLE_KEY; 
-            g_lastValidToggleKey = DEFAULT_TOGGLE_KEY; 
-            UpdateEditFieldText(&g_hotkeyToggleField, std::wstring(1, DEFAULT_TOGGLE_KEY));
-            WritePrivateProfileStringW(L"Hotkeys", L"ToggleOverlayVisibility", std::wstring(1, DEFAULT_TOGGLE_KEY).c_str(), iniPath.c_str());
+    for (size_t i = 0; i < g_imageFiles.size(); ++i) {
+        std::wstring sectionName = L"Location & Size " + std::to_wstring(i);
+        if (iniData.count(sectionName)) {
+            auto& sec = iniData[sectionName];
+            if (sec.count(L"SelectedMonitor"))
+                g_imageFiles[i].settings.monitor = _wtoi(sec[L"SelectedMonitor"].c_str());
+            if (sec.count(L"OffsetX"))
+                g_imageFiles[i].settings.offsetX = _wtoi(sec[L"OffsetX"].c_str());
+            if (sec.count(L"OffsetY"))
+                g_imageFiles[i].settings.offsetY = _wtoi(sec[L"OffsetY"].c_str());
+            if (sec.count(L"ImageScale")) {
+                float scale = (float)_wtof(sec[L"ImageScale"].c_str());
+                if (scale < 0.0f) scale = 0.0f;
+                if (scale > 2.0f) scale = 2.0f;
+                g_imageFiles[i].settings.scale = scale;
+            }
         }
-    }
-    wchar_t settingsKeyStr[10];
-    GetPrivateProfileStringW(L"Hotkeys", L"ToggleSettingsWindowVisibility", std::wstring(1, DEFAULT_SETTINGS_KEY).c_str(), settingsKeyStr, 10, iniPath.c_str());
-    if (wcslen(settingsKeyStr) > 0) {
-        wchar_t key = std::towupper(settingsKeyStr[0]);
-        if (IsValidHotkeyChar(key)) {
-            g_settingsHotkeyKey = key; g_lastValidSettingsKey = key; UpdateEditFieldText(&g_hotkeySettingsField, std::wstring(1, key));
-        } else {
-            g_settingsHotkeyKey = DEFAULT_SETTINGS_KEY; 
-            g_lastValidSettingsKey = DEFAULT_SETTINGS_KEY; 
-            UpdateEditFieldText(&g_hotkeySettingsField, std::wstring(1, DEFAULT_SETTINGS_KEY));
-            WritePrivateProfileStringW(L"Hotkeys", L"ToggleSettingsWindowVisibility", std::wstring(1, DEFAULT_SETTINGS_KEY).c_str(), iniPath.c_str());
-        }
-    }
-    wchar_t cycleKeyStr[10];
-    GetPrivateProfileStringW(L"Hotkeys", L"SwitchToNextImageFromList", std::wstring(1, DEFAULT_CYCLE_KEY).c_str(), cycleKeyStr, 10, iniPath.c_str());
-    if (wcslen(cycleKeyStr) > 0) {
-        wchar_t key = std::towupper(cycleKeyStr[0]);
-        if (IsValidHotkeyChar(key)) {
-            g_cycleHotkeyKey = key; 
-            g_lastValidCycleKey = key; 
-            UpdateEditFieldText(&g_hotkeyCycleField, std::wstring(1, key));
-        } else {
-            g_cycleHotkeyKey = DEFAULT_CYCLE_KEY; 
-            g_lastValidCycleKey = DEFAULT_CYCLE_KEY; 
-            UpdateEditFieldText(&g_hotkeyCycleField, std::wstring(1, DEFAULT_CYCLE_KEY));
-            WritePrivateProfileStringW(L"Hotkeys", L"SwitchToNextImageFromList", std::wstring(1, DEFAULT_CYCLE_KEY).c_str(), iniPath.c_str());
-        }
-    }
-    wchar_t reverseStr[10];
-    GetPrivateProfileStringW(L"Hotkeys", L"ReverseDirection", L"0", reverseStr, 10, iniPath.c_str());
-    g_reverseDirection = (_wtoi(reverseStr) != 0);
-    wchar_t quitKeyStr[10];
-    GetPrivateProfileStringW(L"Hotkeys", L"Quit", std::wstring(1, DEFAULT_QUIT_KEY).c_str(), quitKeyStr, 10, iniPath.c_str());
-    if (wcslen(quitKeyStr) > 0) {
-        wchar_t key = std::towupper(quitKeyStr[0]);
-        if (IsValidHotkeyChar(key)) {
-            g_quitHotkeyKey = key; 
-            g_lastValidQuitKey = key; 
-            UpdateEditFieldText(&g_hotkeyQuitField, std::wstring(1, key));
-        } else {
-            g_quitHotkeyKey = DEFAULT_QUIT_KEY; 
-            g_lastValidQuitKey = DEFAULT_QUIT_KEY; 
-            UpdateEditFieldText(&g_hotkeyQuitField, std::wstring(1, DEFAULT_QUIT_KEY));
-            WritePrivateProfileStringW(L"Hotkeys", L"Quit", std::wstring(1, DEFAULT_QUIT_KEY).c_str(), iniPath.c_str());
-        }
-    }
-    wchar_t windowXStr[32], windowYStr[32];
-    GetPrivateProfileStringW(L"Window", L"WindowX", L"-32768", windowXStr, 32, iniPath.c_str());
-    GetPrivateProfileStringW(L"Window", L"WindowY", L"-32768", windowYStr, 32, iniPath.c_str());
-    g_windowX = _wtoi(windowXStr);
-    g_windowY = _wtoi(windowYStr);
-    if (g_windowX == -32768 || g_windowY == -32768) {
-        int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
-        g_windowX = (sw - 300) / 2;
-        g_windowY = (sh - 300) / 2;
     }
     g_currentImageIndex = -1;
     for (size_t i = 0; i < g_imageFiles.size(); ++i) {
@@ -2660,10 +2669,16 @@ void LoadAllSettingsFromIni() {
     if (g_currentImageIndex != -1) {
         SetCurrentImageSettings(g_currentImageIndex);
         int visibleItems = VISIBLE_ITEMS_IMAGES;
-        if (g_currentImageIndex < g_imageListScrollPos) 
+        if (g_currentImageIndex < g_imageListScrollPos)
             g_imageListScrollPos = g_currentImageIndex;
-        else if (g_currentImageIndex >= g_imageListScrollPos + visibleItems) 
+        else if (g_currentImageIndex >= g_imageListScrollPos + visibleItems)
             g_imageListScrollPos = g_currentImageIndex - visibleItems + 1;
+    }
+    if (g_windowX == CW_USEDEFAULT || g_windowY == CW_USEDEFAULT ||
+        (g_windowX == -32768 && g_windowY == -32768)) {
+        int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+        g_windowX = (sw - 300) / 2;
+        g_windowY = (sh - 300) / 2;
     }
 }
 void SaveAllSettingsToIni() {
@@ -3169,6 +3184,7 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
             g_lastDisplayedImage = imagePath;
         }
         SetCurrentImageSettings(imageIndex);
+        InvalidateRenderBuffer();
     } else {
         auto bitmap = std::make_shared<Bitmap>(imagePath.c_str());
         if (!bitmap || bitmap->GetLastStatus() != Ok) {
@@ -3219,6 +3235,7 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
             g_lastDisplayedImage = imagePath;
         }
         SetCurrentImageSettings(imageIndex);
+        InvalidateRenderBuffer();
     }
     int windowWidth = 2 * g_originalImageWidth;
     int windowHeight = 2 * g_originalImageHeight;
