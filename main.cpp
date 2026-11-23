@@ -2664,7 +2664,9 @@ void LoadAllSettingsFromIni() {
                 std::wstring key = L"Image" + std::to_wstring(i);
                 if (sec.count(key)) {
                     ImageFile img;
-                    img.path = sec[key];
+                    std::wstring rawPath = sec[key];
+                    if (rawPath.size() >= 2 && rawPath.front() == L'\"' && rawPath.back() == L'\"')
+                        img.path = rawPath.substr(1, rawPath.size() - 2);
                     size_t lastSlash = img.path.find_last_of(L"\\/");
                     img.filename = (lastSlash != std::wstring::npos) ? img.path.substr(lastSlash + 1) : img.path;
                     img.settings = ImageSettings();
@@ -2672,8 +2674,11 @@ void LoadAllSettingsFromIni() {
                 }
             }
         }
-        if (sec.count(L"LastDisplayed"))
-            g_lastDisplayedImage = sec[L"LastDisplayed"];
+        if (sec.count(L"LastDisplayed")) {
+            std::wstring raw = sec[L"LastDisplayed"];
+            if (raw.size() >= 2 && raw.front() == L'\"' && raw.back() == L'\"')
+                g_lastDisplayedImage = raw.substr(1, raw.size() - 2);
+        }
     }
     for (size_t i = 0; i < g_imageFiles.size(); ++i) {
         std::wstring sectionName = L"Location & Size " + std::to_wstring(i);
@@ -2742,9 +2747,9 @@ void SaveAllSettingsToIni() {
     content += L"\r\n";
     content += L"[Images List]\r\n";
     content += L"Count=" + std::to_wstring(g_imageFiles.size()) + L"\r\n";
-    content += L"LastDisplayed=" + g_lastDisplayedImage + L"\r\n";
+    content += L"LastDisplayed=\"" + g_lastDisplayedImage + L"\"\r\n";
     for (size_t i = 0; i < g_imageFiles.size(); ++i)
-        content += L"Image" + std::to_wstring(i) + L"=" + g_imageFiles[i].path + L"\r\n";
+        content += L"Image" + std::to_wstring(i) + L"=\"" + g_imageFiles[i].path + L"\"\r\n";
     content += L"\r\n";
     for (size_t i = 0; i < g_imageFiles.size(); ++i) {
         content += L"[Location & Size " + std::to_wstring(i) + L"]\r\n";
@@ -3870,9 +3875,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 g_hTabFont = CreateFont(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_OUTLINE_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,VARIABLE_PITCH,L"Segoe UI");
             g_hMenuFont = CreateFont(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_OUTLINE_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,VARIABLE_PITCH,L"Segoe UI");
             g_hMenuOwner = CreateWindow(L"MenuOwnerClass", L"", WS_POPUP, 0, 0, 0, 0, NULL, NULL, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hTabButton1 = CreateWindowW(L"BUTTON", L"Select Images", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 0, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON1, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hTabButton2 = CreateWindowW(L"BUTTON", L"Location && Size", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 98, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON2, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hTabButton3 = CreateWindowW(L"BUTTON", L"Hotkeys", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 196, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON3, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hTabButton1 = CreateWindowW(L"BUTTON", L"Select Images", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 0, 0, 98, 25, hwnd, (HMENU)ID_TAB_BUTTON1, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hTabButton2 = CreateWindowW(L"BUTTON", L"Location && Size", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 98, 0, 98, 25, hwnd, (HMENU)ID_TAB_BUTTON2, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hTabButton3 = CreateWindowW(L"BUTTON", L"Hotkeys", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 196, 0, 98, 25, hwnd, (HMENU)ID_TAB_BUTTON3, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hImageList = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 7, 47, 280, VISIBLE_ITEMS_IMAGES*ITEM_HEIGHT+2, hwnd, (HMENU)ID_IMAGE_LIST, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_listBoxStates[g_hImageList] = {-1, -1, -1, false, false, {0,0}, -1, 0, false};
             g_hBrowseButton = CreateWindowW(L"BUTTON", L"Browse Image", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 7, 196, 280, 30, hwnd, (HMENU)ID_BROWSE_BUTTON, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
