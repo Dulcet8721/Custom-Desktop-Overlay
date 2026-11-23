@@ -907,10 +907,54 @@ void DrawOwnerDrawButton(HDC hdc, HWND hwnd, bool isPressed, const std::wstring&
     DrawText(hdc, text.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hOldFont);
 }
+void DrawTriangle(HDC hdc, RECT rect, bool up, int height) {
+    int cx = (rect.left + rect.right) / 2;
+    int startY = rect.top + (rect.bottom - rect.top - height) / 2;
+    HBRUSH hBrush = CreateSolidBrush(g_buttonTextColor);
+    for (int row = 0; row < height; ++row) {
+        int y = startY + row;
+        int halfWidth;
+        if (up) {
+            halfWidth = row / 2;
+        } else {
+            halfWidth = (height - 1 - row) / 2;
+        }
+        int leftX = cx - halfWidth;
+        int rightX = cx + halfWidth;
+        RECT lineRect = {leftX, y, rightX + 1, y + 1};
+        FillRect(hdc, &lineRect, hBrush);
+    }
+    DeleteObject(hBrush);
+}
 void DrawOwnerDrawCheckbox(HDC hdc, HWND hwnd, bool isChecked, const std::wstring& text, bool isHovered) {
     RECT rc;
     GetClientRect(hwnd, &rc);
     FillRect(hdc, &rc, g_hBackgroundBrush.get());
+    if (hwnd == g_hReverseDirectionCheckbox) {
+        int checkboxSize = 13;
+        int textMargin = 5;
+        int checkboxX = rc.left + 2;
+        int checkboxY = rc.top + (rc.bottom - rc.top - checkboxSize) / 2;
+        RECT triangleRect = {checkboxX, checkboxY, checkboxX + checkboxSize, checkboxY + checkboxSize};
+        HBRUSH hCheckBrush = isHovered ? g_hCheckboxHoverBrush.get() : g_hCheckboxBrush.get();
+        FillRect(hdc, &triangleRect, hCheckBrush);
+        HPEN hBorderPen = CreatePen(PS_SOLID, 1, g_buttonBorderColor);
+        HPEN hOldPen = (HPEN)SelectObject(hdc, hBorderPen);
+        HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        Rectangle(hdc, triangleRect.left, triangleRect.top, triangleRect.right, triangleRect.bottom);
+        SelectObject(hdc, hOldBrush);
+        SelectObject(hdc, hOldPen);
+        DeleteObject(hBorderPen);
+        DrawTriangle(hdc, triangleRect, isChecked, 8);
+        SetTextColor(hdc, g_textColor);
+        SetBkMode(hdc, TRANSPARENT);
+        RECT textRect = rc;
+        textRect.left = checkboxX + checkboxSize + textMargin;
+        HFONT hOldFont = (HFONT)SelectObject(hdc, g_hTabFont);
+        DrawText(hdc, text.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, hOldFont);
+        return;
+    }
     int checkboxSize = 13;
     int textMargin = 5;
     int checkboxX = rc.left + 2;
@@ -969,7 +1013,6 @@ std::wstring EllipsisText(HDC hdc, const std::wstring& text, int maxWidth) {
     }
     return text.substr(0, best) + L"...";
 }
-
 void DrawSpinButton(HDC hdc, RECT rc, bool up, bool pressed, bool hover) {
     HBRUSH hBrush;
     if (pressed) 
@@ -1291,30 +1334,33 @@ void DrawMenuItem(HDC hdc, RECT rc, const std::wstring& text, bool isSelected, b
     bool isTrayMenuItem = isTrayHideOverlay || text == L"Settings" || text == L"Quit" || text == L"Next Image";
     HBRUSH bgBrush = isSelected ? g_hMenuSelectedBrush.get() : g_hMenuBackgroundBrush.get();
     FillRect(hdc, &rc, bgBrush);
+    int indicatorSize = 13;
+    int indicatorX = rc.left + 5;
+    int indicatorY = rc.top + (rc.bottom - rc.top - indicatorSize) / 2;
+    RECT indicatorRect = {indicatorX, indicatorY, indicatorX + indicatorSize, indicatorY + indicatorSize};
     if (isTrayMenuItem && isTrayHideOverlay) {
-        int checkSize = 13;
-        int checkX = rc.left + 5;
-        int checkY = rc.top + (rc.bottom - rc.top - checkSize)/2;
-        RECT checkRect = {checkX, checkY, checkX+checkSize, checkY+checkSize};
         HPEN hCheckBorder = CreatePen(PS_SOLID, 1, g_darkTheme ? RGB(100,100,100) : RGB(180,180,180));
         HPEN hOldPen = (HPEN)SelectObject(hdc, hCheckBorder);
         HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        Rectangle(hdc, checkRect.left, checkRect.top, checkRect.right, checkRect.bottom);
+        Rectangle(hdc, indicatorRect.left, indicatorRect.top, indicatorRect.right, indicatorRect.bottom);
         SelectObject(hdc, hOldBrush);
         SelectObject(hdc, hOldPen);
         DeleteObject(hCheckBorder);
         HBRUSH hCheckboxBrush = CreateSolidBrush(g_darkTheme ? RGB(60,60,60) : RGB(220,220,220));
-        FillRect(hdc, &checkRect, hCheckboxBrush);
+        FillRect(hdc, &indicatorRect, hCheckboxBrush);
         DeleteObject(hCheckboxBrush);
         if (isChecked) {
             HPEN hCheckPen = CreatePen(PS_SOLID, 2, isDisabled ? (g_darkTheme ? RGB(100,100,100) : RGB(180,180,180)) : g_menuTextColor);
             hOldPen = (HPEN)SelectObject(hdc, hCheckPen);
-            MoveToEx(hdc, checkX+3, checkY+checkSize/2, NULL);
-            LineTo(hdc, checkX+checkSize/2, checkY+checkSize-3);
-            LineTo(hdc, checkX+checkSize-3, checkY+2);
+            MoveToEx(hdc, indicatorX + 3, indicatorY + indicatorSize/2, NULL);
+            LineTo(hdc, indicatorX + indicatorSize/2, indicatorY + indicatorSize - 3);
+            LineTo(hdc, indicatorX + indicatorSize - 3, indicatorY + 2);
             SelectObject(hdc, hOldPen);
             DeleteObject(hCheckPen);
         }
+    } else if (text == L"Next Image") {
+        RECT triangleRect = indicatorRect;
+        DrawTriangle(hdc, triangleRect, g_reverseDirection, 8);
     }
     SetTextColor(hdc, isDisabled ? (g_darkTheme ? RGB(120,120,120) : RGB(150,150,150)) : g_menuTextColor);
     SetBkMode(hdc, TRANSPARENT);
@@ -1781,13 +1827,7 @@ LRESULT HandleOwnerDrawListBox(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 }
 void ApplyOffsetFromField(EditField* field, bool isX) {
     int value = 0;
-    try {
-        if (!field->text.empty()) 
-            value = std::stoi(field->text); 
-    } 
-    catch(...) {
-        value = 0; 
-    }
+    value = _wtoi(field->text.c_str());
     if (value > 9999) 
         value = 9999;
     if (value < -9999) 
@@ -1801,13 +1841,7 @@ void ApplyOffsetFromField(EditField* field, bool isX) {
 }
 void ApplyScaleFromField(EditField* field) {
     float value = 1.0f;
-    try {
-        if (!field->text.empty()) 
-            value = std::stof(field->text); 
-        } 
-    catch(...) {
-        value = 1.0f; 
-    }
+    value = (float)_wtof(field->text.c_str());
     if (value < 0.0f) 
         value = 0.0f;
     if (value > 2.0f) 
@@ -3837,8 +3871,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_hMenuFont = CreateFont(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_OUTLINE_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,VARIABLE_PITCH,L"Segoe UI");
             g_hMenuOwner = CreateWindow(L"MenuOwnerClass", L"", WS_POPUP, 0, 0, 0, 0, NULL, NULL, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hTabButton1 = CreateWindowW(L"BUTTON", L"Select Images", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 0, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON1, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hTabButton2 = CreateWindowW(L"BUTTON", L"Location && Size", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 99, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON2, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-            g_hTabButton3 = CreateWindowW(L"BUTTON", L"Hotkeys", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 198, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON3, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hTabButton2 = CreateWindowW(L"BUTTON", L"Location && Size", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 98, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON2, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+            g_hTabButton3 = CreateWindowW(L"BUTTON", L"Hotkeys", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 196, 0, 99, 25, hwnd, (HMENU)ID_TAB_BUTTON3, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_hImageList = CreateWindowEx(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 7, 47, 280, VISIBLE_ITEMS_IMAGES*ITEM_HEIGHT+2, hwnd, (HMENU)ID_IMAGE_LIST, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
             g_listBoxStates[g_hImageList] = {-1, -1, -1, false, false, {0,0}, -1, 0, false};
             g_hBrowseButton = CreateWindowW(L"BUTTON", L"Browse Image", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, 7, 196, 280, 30, hwnd, (HMENU)ID_BROWSE_BUTTON, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
