@@ -139,6 +139,7 @@ class AnimatedGIF {
 private:
     IWICImagingFactory* m_pFactory;
     IWICBitmapDecoder* m_pDecoder;
+    float m_cachedScale = -1.0f;
     struct GIFrame {
         std::unique_ptr<Gdiplus::Bitmap> bitmap;
         UINT delay;
@@ -191,6 +192,13 @@ public:
         Cleanup();
         if (m_pFactory) 
             m_pFactory->Release();
+    }
+    void UpdateScale(float scale) {
+        std::lock_guard<std::mutex> lock(m_cacheMutex);
+        if (m_scaledCacheScale != scale) {
+            m_scaledFrames.clear();
+            m_scaledCacheScale = scale;
+        }
     }
     bool Load(const std::wstring& filename) {
         Cleanup();
@@ -351,11 +359,8 @@ public:
         if (index < 0 || index >= (int)m_frames.size()) 
             return nullptr;
         std::lock_guard<std::mutex> lock(m_cacheMutex);
-        if (m_scaledCacheScale != scale || m_scaledFrames.size() != m_frames.size()) {
-            m_scaledFrames.clear();
+        if (index >= (int)m_scaledFrames.size())
             m_scaledFrames.resize(m_frames.size());
-            m_scaledCacheScale = scale;
-        }
         if (!m_scaledFrames[index]) {
             Bitmap* orig = m_frames[index].bitmap.get();
             auto scaled = std::make_shared<Bitmap>(targetWidth, targetHeight, PixelFormat32bppPARGB);
@@ -585,6 +590,9 @@ WNDPROC g_oldSpinYUpProc = NULL;
 WNDPROC g_oldSpinYDownProc = NULL;
 WNDPROC g_oldSpinSizeUpProc = NULL;
 WNDPROC g_oldSpinSizeDownProc = NULL;
+std::atomic<bool> g_cacheInvalidated{false};
+DWORD g_lastScaleChangeTime = 0;
+const DWORD SCALE_CHANGE_THROTTLE_MS = 20;
 LRESULT CALLBACK OverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 std::wstring GetIniFilePath() {
     wchar_t exePath[MAX_PATH] = {0};
@@ -726,6 +734,12 @@ LRESULT CALLBACK MenuOwnerProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 void InvalidateRenderBuffer() {
     g_renderBuffer.valid.store(false, std::memory_order_relaxed);
 }
+void ForceTopmost(HWND hWnd) {
+    if (!hWnd || !IsWindow(hWnd)) 
+        return;
+    SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SetWindowPos(hWnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
 void LoadMonitorNamesThread() {
     if (g_programExiting) 
         return;
@@ -756,6 +770,16 @@ void LoadMonitorNamesThread() {
         PostMessage(g_hwnd, WM_UPDATE_MONITOR_NAMES, 0, 0);
     }
     g_monitorNamesThreadRunning = false;
+}
+void RequestScaleCacheUpdate() {
+    DWORD now = GetTickCount();
+    if (now - g_lastScaleChangeTime >= SCALE_CHANGE_THROTTLE_MS) {
+        g_lastScaleChangeTime = now;
+        bool expected = false;
+        if (g_cacheInvalidated.compare_exchange_strong(expected, true)) {
+            SetEvent(g_renderEvent);
+        }
+    }
 }
 void RenderStaticToBufferInternal() {
     if (!g_cachedBitmapShared) 
@@ -2825,6 +2849,7 @@ void CorrectOffsetValues() {
     }
     if (g_currentOverlay) {
         UpdateOverlayPosition(monX, monY, monW, monH);
+        ForceTopmost(g_currentOverlay);
     }
     if (g_currentImageIndex != -1) 
         SaveCurrentImageSettings();
@@ -2870,6 +2895,7 @@ void UpdateOverlayPosition(int monitorX, int monitorY, int monitorWidth, int mon
     GetWindowRect(g_currentOverlay, &rc);
     g_overlayX = rc.left;
     g_overlayY = rc.top;
+    ForceTopmost(g_currentOverlay);
 }
 void UpdateOverlayPosition() {
     if (!g_currentOverlay) 
@@ -2910,10 +2936,10 @@ void RenderOverlayInThread() {
     HANDLE hEvent = g_renderEvent;
     while (!g_renderThreadShouldExit) {
         WaitForSingleObject(hEvent, INFINITE);
-        if (g_renderThreadShouldExit) 
+        if (g_renderThreadShouldExit)
             break;
         HWND hwnd = g_currentOverlayAtomic.load();
-        if (!hwnd || !IsWindow(hwnd)) 
+        if (!hwnd || !IsWindow(hwnd))
             continue;
         int origWidth = 0, origHeight = 0;
         float scale = 1.0f;
@@ -2930,11 +2956,19 @@ void RenderOverlayInThread() {
             overlayX = g_overlayX.load();
             overlayY = g_overlayY.load();
         }
-        if (!IsWindowVisible(hwnd)) 
+        bool needClearCache = g_cacheInvalidated.exchange(false);
+        if (needClearCache) {
+            std::lock_guard<std::mutex> lock(g_renderDataMutex);
+            if (gifCopy) {
+                gifCopy->UpdateScale(scale);
+            }
+            InvalidateRenderBuffer();
+        }
+        if (!IsWindowVisible(hwnd))
             continue;
         int windowWidth = 2 * origWidth;
         int windowHeight = 2 * origHeight;
-        if (windowWidth <= 0 || windowHeight <= 0) 
+        if (windowWidth <= 0 || windowHeight <= 0)
             continue;
         int drawWidth = (int)(origWidth * scale);
         int drawHeight = (int)(origHeight * scale);
@@ -2959,7 +2993,10 @@ void RenderOverlayInThread() {
                 POINT ptPos = {overlayX, overlayY};
                 SIZE sizeWnd = {windowWidth, windowHeight};
                 POINT ptSrc = {0, 0};
-                UpdateLayeredWindow(hwnd, hdcScreen, &ptPos, &sizeWnd, g_renderBuffer.hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
+                {
+                    std::lock_guard<std::mutex> lock(g_renderBuffer.mutex);
+                    UpdateLayeredWindow(hwnd, hdcScreen, &ptPos, &sizeWnd, g_renderBuffer.hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
+                }
                 ReleaseDC(NULL, hdcScreen);
             }
             continue;
@@ -2970,7 +3007,7 @@ void RenderOverlayInThread() {
             Graphics graphics(g_renderBuffer.hdcMem);
             graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
             graphics.SetCompositingMode(CompositingModeSourceCopy);
-            SolidBrush clearBrush(Color(0,0,0,0));
+            SolidBrush clearBrush(Color(0, 0, 0, 0));
             graphics.FillRectangle(&clearBrush, 0, 0, windowWidth, windowHeight);
             graphics.SetCompositingMode(CompositingModeSourceOver);
             if (gifCopy && gifCopy->IsInitialized()) {
@@ -2983,10 +3020,10 @@ void RenderOverlayInThread() {
             }
             HDC hdcScreen = GetDC(NULL);
             if (hdcScreen) {
-                BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-                POINT ptPos = {overlayX, overlayY};
-                SIZE sizeWnd = {windowWidth, windowHeight};
-                POINT ptSrc = {0, 0};
+                BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+                POINT ptPos = { overlayX, overlayY };
+                SIZE sizeWnd = { windowWidth, windowHeight };
+                POINT ptSrc = { 0, 0 };
                 UpdateLayeredWindow(hwnd, hdcScreen, &ptPos, &sizeWnd, g_renderBuffer.hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
                 ReleaseDC(NULL, hdcScreen);
             }
@@ -3029,6 +3066,14 @@ void ApplyScaleChange() {
 }
 LRESULT CALLBACK OverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+        case WM_WINDOWPOSCHANGING: {
+            WINDOWPOS* wp = (WINDOWPOS*)lParam;
+            if (!(wp->flags & SWP_NOZORDER)) {
+                wp->hwndInsertAfter = HWND_TOPMOST;
+                wp->flags &= ~SWP_NOZORDER;
+            }
+            break;
+        }
         case WM_TIMER:
             if (wParam == ID_ANIMATION_TIMER) {
                 std::shared_ptr<AnimatedGIF> gif;
@@ -3325,9 +3370,11 @@ void CreateOverlayWindow(int imageIndex, bool saveToIni) {
         g_currentOverlayAtomic = g_currentOverlay;
         g_overlayX = x;
         g_overlayY = y;
+        ForceTopmost(g_currentOverlay);
         if (!g_hideOverlay) {
             ShowWindow(g_currentOverlay, SW_SHOWNA);
             SetWindowPos(g_currentOverlay, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            ForceTopmost(g_currentOverlay);
         }
     }
     StartRenderThread();
@@ -3434,24 +3481,69 @@ bool RegisterHotkeys() {
 void ToggleHideOverlay() {
     g_hideOverlay = !g_hideOverlay;
     if (g_currentOverlay) {
-        ShowWindow(g_currentOverlay, g_hideOverlay ? SW_HIDE : SW_SHOWNA);
         if (!g_hideOverlay) {
-            SetWindowPos(g_currentOverlay, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            std::shared_ptr<AnimatedGIF> gif;
-            { 
-                std::lock_guard<std::mutex> lock(g_renderDataMutex); 
-                gif = g_animatedGIFShared; 
+            InvalidateRenderBuffer();
+            int windowWidth = 2 * g_originalImageWidth;
+            int windowHeight = 2 * g_originalImageHeight;
+            {
+                std::lock_guard<std::mutex> lock(g_renderDataMutex);
+                if (windowWidth > 0 && windowHeight > 0) {
+                    EnsureRenderBuffer(windowWidth, windowHeight);
+                    std::lock_guard<std::mutex> bufLock(g_renderBuffer.mutex);
+                    Graphics graphics(g_renderBuffer.hdcMem);
+                    graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+                    graphics.SetCompositingMode(CompositingModeSourceCopy);
+                    SolidBrush clearBrush(Color(0, 0, 0, 0));
+                    graphics.FillRectangle(&clearBrush, 0, 0, windowWidth, windowHeight);
+                    graphics.SetCompositingMode(CompositingModeSourceOver);
+                    float scale = g_imageScale.load(std::memory_order_relaxed);
+                    int drawWidth = (int)(g_originalImageWidth * scale);
+                    int drawHeight = (int)(g_originalImageHeight * scale);
+                    int drawX = (windowWidth - drawWidth) / 2;
+                    int drawY = (windowHeight - drawHeight) / 2;
+                    if (g_animatedGIFShared && g_animatedGIFShared->IsInitialized()) {
+                        int frameIdx = g_animatedGIFShared->GetCurrentFrameIndex();
+                        auto scaledFrame = g_animatedGIFShared->GetScaledFrame(frameIdx, scale, drawWidth, drawHeight);
+                        if (scaledFrame) {
+                            Rect destRect(drawX, drawY, drawWidth, drawHeight);
+                            graphics.DrawImage(scaledFrame.get(), destRect);
+                        }
+                    } else if (g_cachedBitmapShared) {
+                        Rect destRect(drawX, drawY, drawWidth, drawHeight);
+                        graphics.DrawImage(g_cachedBitmapShared.get(), destRect);
+                    }
+                    g_renderBuffer.valid = true;
+                }
             }
-            if (gif && gif->IsInitialized() && gif->IsAnimated()) 
-                gif->StartAnimation(g_currentOverlay);
-            RenderOverlay();
-        } else {
+            if (windowWidth > 0 && windowHeight > 0) {
+                HDC hdcScreen = GetDC(NULL);
+                BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+                POINT ptPos = {g_overlayX.load(), g_overlayY.load()};
+                SIZE sizeWnd = {windowWidth, windowHeight};
+                POINT ptSrc = {0, 0};
+                UpdateLayeredWindow(g_currentOverlay, hdcScreen, &ptPos, &sizeWnd, g_renderBuffer.hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
+                ReleaseDC(NULL, hdcScreen);
+            }
+            ShowWindow(g_currentOverlay, SW_SHOWNA);
+            SetWindowPos(g_currentOverlay, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            ForceTopmost(g_currentOverlay);
             std::shared_ptr<AnimatedGIF> gif;
             {
                 std::lock_guard<std::mutex> lock(g_renderDataMutex);
                 gif = g_animatedGIFShared;
             }
-            if (gif) 
+            if (gif && gif->IsInitialized() && gif->IsAnimated())
+                gif->StartAnimation(g_currentOverlay);
+
+            SetEvent(g_renderEvent);
+        } else {
+            ShowWindow(g_currentOverlay, SW_HIDE);
+            std::shared_ptr<AnimatedGIF> gif;
+            {
+                std::lock_guard<std::mutex> lock(g_renderDataMutex);
+                gif = g_animatedGIFShared;
+            }
+            if (gif)
                 gif->StopAnimation();
         }
     }
@@ -4006,9 +4098,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             if (g_currentOverlay) {
                 UpdateOverlayPosition();
                 RenderOverlay();
+                ForceTopmost(g_currentOverlay);
             }
             return 0;
         }
+        case WM_ACTIVATEAPP:
+            if (wParam == TRUE && g_currentOverlay) {
+                ForceTopmost(g_currentOverlay);
+            }
+            return 0;
         case WM_HOTKEY:
             SendMessage(hwnd, WM_CANCELMODE, 0, 0);
             return HandleHotkey(wParam);
@@ -4634,16 +4732,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 if (fabs(g_imageScale.load() - newScale) > 0.001f) {
                     g_imageScale.store(newScale, std::memory_order_relaxed);
                     UpdateScaleControls();
-                    ApplyScaleChange();
+                    RequestScaleCacheUpdate();
                 }
             }
             break;
         case WM_LBUTTONUP:
             if (dragging) {
-                dragging = false; 
-                ReleaseCapture(); 
+                dragging = false;
+                ReleaseCapture();
+                g_cacheInvalidated = true;
                 ApplyScaleChange();
-                if (g_currentImageIndex != -1) 
+                if (g_currentImageIndex != -1)
                     SaveCurrentImageSettings();
                 g_settingsChanged = true;
             }
